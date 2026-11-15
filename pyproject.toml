@@ -1,0 +1,78 @@
+[project]
+name = "wids-access-ai"
+version = "1.0.0b1"
+license = { text = "MIT" }
+description = "WIDS ACCESS AI - KI-Assistent fuer Microsoft Access, te.comp-Uebungen und Datenbankaufgaben"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "PySide6-Essentials>=6.7",
+    "pywin32>=306",
+    "pydantic>=2.7",
+    "openai>=1.50",
+    "anthropic>=0.40",
+    "Pillow>=10",
+    "psutil>=5.9",
+    "winrt-runtime",
+    "winrt-Windows.Media.Ocr",
+    "winrt-Windows.Graphics.Imaging",
+    "winrt-Windows.Storage.Streams",
+    "winrt-Windows.Globalization",
+    "winrt-Windows.Foundation",
+    "winrt-Windows.Foundation.Collections",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-qt>=4.4",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "pyinstaller>=6.6",
+    "pywinauto>=0.6.8",  # nur für scripts/check_exe_key.py (EXE über die Oberfläche prüfen)
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# faulthandler aus: Beim Beenden der unsichtbaren Access-Instanz meldet Windows intern eine
+# (behandelte) RPC-Ausnahme, die faulthandler sonst als irreführenden "fatal exception"-Dump ausgibt.
+addopts = "-ra -q -p no:faulthandler"
+markers = [
+    "access: benoetigt eine echte Microsoft-Access-/DAO-Installation",
+    "access_app: startet eine unsichtbare Access-Instanz (Formulare/Berichte)",
+    "gui: benoetigt eine Qt-Oberflaeche",
+    "live_ai: benoetigt einen echten API-Schluessel (WIDS_LIVE_AI=1)",
+    "tecomp: benoetigt eine installierte te.comp-training-Software",
+    "live_tecomp: benoetigt ein laufendes te.comp mit geoeffneter Access-Uebung (nur lesend)",
+]
+qt_api = "pyside6"
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+extend-exclude = ["build", "dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = [
+    "RUF001", "RUF002", "RUF003",  # deutsche Texte mit typografischen Zeichen
+    "SIM105",
+    "B904",
+    "E501",    # lange Zeilen (v. a. deutsche Meldungstexte) werden nicht umbrochen
+    "RUF059",
+]
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_ignores = false
+ignore_missing_imports = true
+check_untyped_defs = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+exclude = ["build/", "dist/", "tests/"]
+
+[[tool.mypy.overrides]]
+# Die PySide6-Stubs kennen Qt-Eigenschaften als Schlüsselwortargumente nicht (z. B. QLabel(..., objectName=...)),
+# obwohl PySide6 sie zur Laufzeit unterstützt.
+module = ["app.ui.*"]
+disable_error_code = ["call-overload", "call-arg"]

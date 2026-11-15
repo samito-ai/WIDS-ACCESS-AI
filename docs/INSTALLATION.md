@@ -1,0 +1,52 @@
+# Installation und Einrichtung (Windows)
+
+## Voraussetzungen
+- **Windows 10 oder 11** (64 Bit).
+- **Microsoft Access** (Office/Microsoft 365, Access 2016 oder neuer). WIDS steuert Access selbst – ohne installiertes
+  Access funktioniert nur der KI-Assistent für Fragen. Access muss **einmal von Hand gestartet** worden sein (Lizenz-
+  und Erststartdialoge bestätigt).
+- Optional **te.comp-training** für Lernprogramme und Workshops; WIDS funktioniert auch mit beliebigen eigenen
+  Access-Übungsdatenbanken.
+- Ein **Anthropic-API-Schlüssel** mit Guthaben (siehe unten). Ohne Schlüssel startet WIDS, kann aber nichts planen.
+
+## Variante A: fertige EXE (empfohlen)
+1. `WIDS-Access-AI.exe` aus dem GitHub-Release herunterladen (keine Installation nötig) und z. B. nach
+   `%LOCALAPPDATA%\Programs\WIDS-Access-AI\` kopieren.
+2. Starten. Windows SmartScreen kann bei einer neuen, unsignierten EXE warnen („Weitere Informationen → Trotzdem
+   ausführen“) – nur bei einer EXE aus dem offiziellen Release tun und die SHA-256-Prüfsumme vergleichen.
+3. Optional in den Einstellungen „Mit Windows starten (im Hintergrund)“ aktivieren.
+
+## Variante B: aus dem Quellcode
+```powershell
+git clone https://github.com/samito-ai/WIDS-ACCESS-AI.git
+cd WIDS-ACCESS-AI
+powershell -ExecutionPolicy Bypass -File scripts\setup_dev.ps1   # Python 3.11 nötig
+powershell -ExecutionPolicy Bypass -File scripts\run.ps1
+```
+Eigene EXE bauen: `python build.py` (PyInstaller, inklusive Selbsttest).
+
+## Anthropic-API-Schlüssel sicher einrichten
+1. Auf <https://console.anthropic.com> ein Konto anlegen, Guthaben aufladen und unter „API Keys“ einen **eigenen**
+   Schlüssel erzeugen. Empfehlung: einen eigenen Workspace mit **Ausgabenlimit** (Spend Limit) für WIDS verwenden.
+2. WIDS öffnen → **Einstellungen** → Schlüssel einfügen → **„Verbindung testen“** (eine sehr kleine, bezahlte Anfrage,
+   ca. 0,001 $). Der Schlüssel wird dabei gespeichert.
+3. Gespeichert wird in der **Windows-Anmeldeinformationsverwaltung** (Eintrag `WIDS-Access-AI/api-key-anthropic`,
+   von Windows für dein Benutzerkonto verschlüsselt). Nur wenn diese nicht verfügbar ist, nutzt WIDS ersatzweise eine
+   mit Windows-DPAPI für dein Benutzerkonto **verschlüsselte** Datei unter `%LOCALAPPDATA%\WIDS-Access-AI` (die
+   Einstellungen zeigen, welche Ablage aktiv ist). Nie im Klartext, nie im Verlauf oder Protokoll. Entfernen:
+   Systemsteuerung → Anmeldeinformationsverwaltung → Windows-Anmeldeinformationen (bzw. in WIDS „Schlüssel löschen“).
+4. Zusätzlich in WIDS ein **Kostenlimit** setzen (Einstellungen → KI → Kostenlimit pro Tag/Monat). Eine typische
+   Übung kostet etwa 0,05–0,35 $.
+5. Den Schlüssel **nie** weitergeben, in Screenshots zeigen oder in Issues/Repositories einfügen. Bei Verdacht sofort in
+   der Anthropic-Konsole widerrufen.
+
+## Erste Schritte
+1. Dashboard → Karte „Lernprogramm-Freigabe“: Lernprogramm/Workshop wählen → „freigeben (24 h)“. Eigene Datenbanken
+   einmal „diesem Lernprogramm zuordnen“ oder im Dashboard mit Planfreigabe bearbeiten.
+2. Übung öffnen und **Alt+W** drücken. Statuspunkt oben links: gelb = arbeitet, grün = vollständig geprüft,
+   rot = nicht abgeschlossen (Grund im Verlauf).
+3. Vor jeder Änderung wird automatisch eine Sicherung erstellt (Verlauf → „Sicherung dieser Aufgabe wiederherstellen“).
+
+## Nur für Übungen
+WIDS sperrt sich, wenn eine Prüfungsumgebung läuft (z. B. Next Exam, Safe Exam Browser), und klickt nie „Prüfen“,
+„Abschließen“ oder „Upload“. Die Verantwortung für den Einsatz liegt beim Benutzer.

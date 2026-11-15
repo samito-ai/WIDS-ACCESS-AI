@@ -1,0 +1,56 @@
+# --- Geheimnisse und persönliche Daten (nie veröffentlichen) -----------------------------
+# (bewusst keine Muster wie *secret*: app/security/secrets.py ist Quellcode und gehört ins Repository)
+.env
+.env.*
+*.key
+*.pem
+*.pfx
+# WIDS-Daten (Verlauf, Einstellungen, Sicherungen, Protokolle, DPAPI-Schlüsseldatei) liegen außerhalb des Projekts in
+# %LOCALAPPDATA%\WIDS-Access-AI – zur Sicherheit auch hier ausgeschlossen
+*.sqlite3
+*.sqlite3-*
+*.dpapi
+*.log
+logs/
+backups/
+workcopies/
+
+# --- Access-/Office-Dateien (Übungs-, Schul- und Testdatenbanken) ------------------------
+*.accdb
+*.mdb
+*.laccdb
+*.ldb
+*.xlsx
+*.xls
+*.csv
+
+# --- Lokale Sicherungen, Builds und EXE --------------------------------------------------
+sicherungen/
+dist/
+build/
+*.spec
+*.exe
+*.zip
+
+# --- Python / Werkzeuge ------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# --- Betriebssystem / Editor -------------------------------------------------------------
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/
+.claude/
+
+# Interne Entwicklungsunterlagen (nicht veröffentlichen)
+intern/
