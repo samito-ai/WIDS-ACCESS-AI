@@ -1,4 +1,4 @@
-# WIDS ACCESS AI v1.0.0 Beta 2 (Final Release Candidate, Build 16.11.2026 21:41)
+# WIDS ACCESS AI v1.0.0 Beta 2 (Final Release Candidate, Build 16.11.2026 21:54)
 
 Stabilitäts-Beta: Fehler aus echten Übungsläufen behoben, kein Freigabesystem mehr, schneller.
 Kostenlos und Open Source (MIT). **Nur für Übungen – nicht für benotete Prüfungen.**
@@ -7,7 +7,7 @@ Kostenlos und Open Source (MIT). **Nur für Übungen – nicht für benotete Pr�
 
 | Datei | Größe | SHA-256 |
 |---|---|---|
-| `WIDS-Access-AI.exe` | 65 209 438 Bytes | `F3FAB3AFE177155662419253CD287EA209C7B9B3F4446DB41DB9610BE1DFA177` |
+| `WIDS-Access-AI.exe` | 65 208 928 Bytes | `A55BAA707DC1E38D720A9188FD436F8F06A634D418E3A5EC23225864F0B9B674` |
 
 Prüfen in PowerShell: `Get-FileHash .\WIDS-Access-AI.exe -Algorithm SHA256`. Die EXE ist nicht signiert (SmartScreen
 kann warnen). Vor dem Start der neuen Version eine laufende ältere Instanz über das Infobereich-Symbol beenden.
@@ -35,6 +35,7 @@ kann warnen). Vor dem Start der neuen Version eine laufende ältere Instanz übe
 - Tabellenkopien übernehmen Nachschlagefelder und die Gültigkeitsregel der Tabelle.
 - Selbstkorrektur legt keine doppelten Steuerelemente („…_2“) mehr an; ein späteres Neuanlegen eines Objekts löst die
   Neuprüfung früherer Schritte aus.
+- „Mit Windows starten“ funktioniert auch auf frischen Windows-Profilen ohne Autostart-Schlüssel.
 - Eine verworfene Access-Verbindung wird ordentlich geschlossen (keine verwaisten Instanzen, keine hängenden Folgeläufe).
 
 - Eine nicht ausführbare Abfrage der Übungsdatenbank (fehlende Eingabetabelle) wurde der KI als normale Datenquelle

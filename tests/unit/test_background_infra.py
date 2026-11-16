@@ -61,3 +61,22 @@ def test_autostart_needs_built_exe() -> None:
     assert autostart.command() is None, "aus dem Quellcode gestartet gibt es keinen festen Programmpfad"
     with pytest.raises(OSError):
         autostart.set_enabled(True, name="WIDS-Access-AI-TEST-never")
+
+
+def test_autostart_works_when_the_run_key_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    r"""GitHub-Runner 16.11.: auf frischen Windows-Profilen fehlt HKCU\…\Run – Autostart muss ihn anlegen.
+    Getestet mit einem eigenen, temporären Schlüssel (der echte Autostart bleibt unberührt)."""
+    import winreg
+
+    base = rf"Software\WIDS-Access-AI-Test-{uuid.uuid4().hex[:8]}"
+    monkeypatch.setattr(autostart, "RUN_KEY", base + r"\Run")
+    try:
+        autostart.set_enabled(False, name="X")  # fehlender Schlüssel: Entfernen ist harmlos
+        autostart.set_enabled(True, name="X", cmd=r'"C:\Test\wids.exe" --background')
+        assert autostart.get("X") == r'"C:\Test\wids.exe" --background'
+    finally:
+        for key in (base + r"\Run", base):
+            try:
+                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key)
+            except FileNotFoundError:
+                pass

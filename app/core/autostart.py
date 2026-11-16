@@ -23,14 +23,16 @@ def get(name: str = APP_ID) -> str | None:
 
 
 def set_enabled(enabled: bool, *, name: str = APP_ID, cmd: str | None = None) -> None:
-    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
-        if enabled:
-            value = cmd or command()
-            if value is None:
-                raise OSError("Autostart ist nur mit der gebauten EXE möglich.")
+    if enabled:
+        value = cmd or command()
+        if value is None:
+            raise OSError("Autostart ist nur mit der gebauten EXE möglich.")
+        # CreateKeyEx: auf frischen Windows-Profilen fehlt der Run-Schlüssel (GitHub-Runner, neue PCs)
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
             winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
-        else:
-            try:
-                winreg.DeleteValue(key, name)
-            except FileNotFoundError:
-                pass
+        return
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.DeleteValue(key, name)
+    except FileNotFoundError:
+        pass  # kein Schlüssel bzw. kein Eintrag – nichts zu entfernen
