@@ -50,18 +50,26 @@ def tecomp_dirs(db_path: str) -> list[Path]:
     workshop = tecomp.workshop_for(db_path) if in_workdir and not match else None
     if workshop is not None:  # Quelldateien eines Workshops (z. B. CDs.xls) liegen im Workshop-Ordner
         dirs.append(workshop)
-    dirs += tecomp.workdirs()
-    return [d for d in dirs if d.is_dir()]
+    work = tecomp.workdirs()  # bereits auf Erreichbarkeit geprüft (Netzlaufwerk mit Zeitlimit)
+    return [d for d in dirs if d.is_dir()] + work
 
 
 IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".gif", ".bmp")
+
+
+def _entries(folder: Path) -> list[Path]:
+    """Dateien eines Quellordners – ein inzwischen getrenntes Laufwerk (z. B. W:) liefert nichts statt eines Fehlers."""
+    try:
+        return sorted(folder.iterdir())
+    except OSError:
+        return []
 
 
 def image_files(db_path: str) -> list[Path]:
     """Bilddateien im Übungsordner (für Anlagefelder), erster Fundort je Dateiname gewinnt."""
     seen: dict[str, Path] = {}
     for folder in search_dirs(db_path):
-        for path in sorted(folder.iterdir()):
+        for path in _entries(folder):
             if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES:
                 seen.setdefault(path.name.lower(), path)
     return list(seen.values())
@@ -76,7 +84,7 @@ def resolve_source(name: str, db_path: str) -> Path:
         raise ObjectNotFoundError("Datei", name)
     wanted = candidate.name.lower()
     for folder in search_dirs(db_path):
-        for path in sorted(folder.iterdir()):
+        for path in _entries(folder):
             if path.is_file() and path.suffix.lower() in ALLOWED_SUFFIXES and wanted in (path.name.lower(), path.stem.lower()):
                 return path
     raise ObjectNotFoundError("Datei", name)
@@ -87,7 +95,7 @@ def mentioned_sources(task_text: str, db_path: str) -> list[Path]:
     text = task_text.lower()
     found: list[Path] = []
     for folder in search_dirs(db_path):  # te.comp-Ordner und der Ordner der Datenbank (nur namentlich genannte Dateien)
-        for path in sorted(folder.iterdir()):
+        for path in _entries(folder):
             if path.is_file() and path.suffix.lower() in ALLOWED_SUFFIXES and re.search(
                 rf"(?<![\w]){re.escape(path.stem.lower())}(?![\w])", text) and path not in found:
                 found.append(path)
@@ -321,6 +329,10 @@ def infer_type(values: list[Any]) -> AccessType:
     return AccessType.LONG_TEXT if max(len(t) for t in texts) > 255 else AccessType.SHORT_TEXT
 
 
+#: Freitextspalten (Notizen, Anmerkungen …) sind in Access „Langer Text“ – auch wenn die Beispielwerte kurz sind
+_NOTES_COLUMN = re.compile(r"(?i)(anmerkung|bemerkung|notiz|kommentar|beschreibung|hinweis|liedtext|memo)")
+
+
 def infer_fields(header: list[Any] | None, data: list[list[Any]]) -> list[FieldSpec]:
     width = max((len(r) for r in data), default=len(header or []))
     names: list[str] = []
@@ -329,7 +341,13 @@ def infer_fields(header: list[Any] | None, data: list[list[Any]]) -> list[FieldS
         while name.lower() in (n.lower() for n in names):
             name += "_"
         names.append(name)
-    return [FieldSpec(name=name, type=infer_type([r[i] if i < len(r) else "" for r in data])) for i, name in enumerate(names)]
+    specs = []
+    for i, name in enumerate(names):
+        kind = infer_type([r[i] if i < len(r) else "" for r in data])
+        if kind == AccessType.SHORT_TEXT and _NOTES_COLUMN.search(name):
+            kind = AccessType.LONG_TEXT
+        specs.append(FieldSpec(name=name, type=kind))
+    return specs
 
 
 def excel_serial_to_datetime(value: Any) -> Any:

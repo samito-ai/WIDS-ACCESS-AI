@@ -1,7 +1,6 @@
 """Typisierte Anwendungseinstellungen (Pydantic), persistiert in SQLite."""
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -83,20 +82,6 @@ class AutomationSettings(BaseModel):
     diagnostic_report: bool = True
 
 
-class ProgramApproval(BaseModel):
-    """24-Stunden-Freigabe eines te.comp-Lernprogramms (siehe ``app.security.programs``). Abgelaufene und widerrufene
-    Einträge bleiben zur Nachvollziehbarkeit gespeichert."""
-
-    program_id: str  # z. B. "Kap.02"
-    caption: str  # z. B. "DA - Tabellen"
-    approved_at: str  # ISO-Zeitpunkt (UTC)
-    expires_at: str  # ISO-Zeitpunkt (UTC)
-    revoked: bool = False
-
-    def active(self, now: datetime | None = None) -> bool:
-        return not self.revoked and datetime.fromisoformat(self.expires_at) > (now or datetime.now(tz=UTC))
-
-
 class SecuritySettings(BaseModel):
     always_backup: bool = True
     max_backups_per_db: int = 20
@@ -117,12 +102,6 @@ class SecuritySettings(BaseModel):
         ]
     )
     block_in_exam_mode: bool = True
-    #: Ausdrücklich freigegebene eigene Übungsdatenbanken: nicht löschende Pläne ohne erneute Freigabe
-    trusted_databases: list[str] = Field(default_factory=list)
-    #: 24-Stunden-Freigaben je te.comp-Lernprogramm (gilt für alle eindeutig zugehörigen Übungsdateien)
-    program_approvals: list[ProgramApproval] = Field(default_factory=list)
-    #: vom Benutzer im Dashboard bestätigte Zuordnung Datei (voller Pfad) → Lernprogramm/Workshop
-    program_assignments: dict[str, str] = Field(default_factory=dict)
 
 
 class UISettings(BaseModel):

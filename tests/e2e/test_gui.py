@@ -103,7 +103,7 @@ def test_full_workflow_through_ui(app_window: Any, qtbot: Any, tmp_path: Path) -
     assert "qryImst" in window.task_view.toPlainText() and window.btn_run.isEnabled()
     window.btn_run.click()
     qtbot.waitUntil(lambda: not window._busy and window._prepared is None, timeout=60000)
-    assert len(requests) == 1 and requests[0].db_name == "gui.accdb"
+    assert requests == [], "kein Freigabedialog – der Benutzer hat die Ausführung selbst gestartet"
     assert "Erfolgreich" in window.task_status.text()
     assert window.ctx.access.run(lambda e: e.queries.run_select("qryImst"))[1] == [["Auer", "Imst"], ["Gruber", "Imst"]]
     assert any("Prüfung bestanden" in window.task_log.item(i).text() for i in range(window.task_log.count()))
@@ -146,11 +146,11 @@ def test_rejected_approval_and_chat(app_window: Any, qtbot: Any, tmp_path: Path)
     assert len(window.ctx.storage.list_chat_messages()) == 2
 
 
-# --------------------------------------------------------------------------- Ruhemodus, Statuspunkt, Lernprogramm-Freigabe
+# --------------------------------------------------------------------------- Ruhemodus, Statuspunkt, Alt+W ohne Freigabe
 def test_background_mode_opens_no_dialog_no_toast_and_keeps_red_dot(app_window: Any, qtbot: Any, tmp_path: Path,
                                                                       monkeypatch: pytest.MonkeyPatch) -> None:
-    """Dashboard geschlossen: keine Freigabe-/Fehlerdialoge, keine Windows-Benachrichtigung, kein Fenster geht auf.
-    Fehlende Freigabe = angehalten, im Verlauf gespeichert, Statuspunkt rot (bleibt stehen)."""
+    """Dashboard geschlossen: keine Dialoge, keine Windows-Benachrichtigung, kein Fenster geht auf. Ein löschender
+    Plan wird im Hintergrund nie automatisch ausgeführt: angehalten, im Verlauf gespeichert, Statuspunkt rot (bleibt)."""
     from PySide6.QtWidgets import QSystemTrayIcon
 
     window, provider, messages = app_window
@@ -159,18 +159,19 @@ def test_background_mode_opens_no_dialog_no_toast_and_keeps_red_dot(app_window: 
     dialogs: list[Any] = []
     window._approval_dialog = lambda request: dialogs.append(request) or ApprovalDecision(approved=True, practice_confirmed=True)
     window.ctx.access.create_database(str(tmp_path / "ruhe.accdb"), sampledb.populate)
-    provider.responses.append(solution([{"action": {"action": "create_query", "name": "qryRuhe",
-                                                    "sql": "SELECT Nachname FROM Kunden"}}]))
-    window.task_text.setPlainText("Erstellen Sie die Abfrage qryRuhe.")
+    provider.responses.append(solution([{"action": {"action": "delete_records", "table": "Bestellungen",
+                                                    "where": "Menge > 0"}}], task_type="data_editing"))
+    before = window.ctx.access.run(lambda e: e.tables.count_records("Bestellungen"))
+    window.task_text.setPlainText("Löschen Sie alle Bestellungen mit einer Menge.")
     window.hide()
     assert window.mode() == "background" and not window.bridge.can_ask()
     window.analyze(execute=True)
     qtbot.waitUntil(lambda: not window._busy and window._prepared is None, timeout=60000)
     assert dialogs == [] and toasts == [] and messages == [], "kein Dialog, keine Benachrichtigung"
     assert not window.isVisible() and not window.compact.isVisible(), "kein Fenster öffnet sich von selbst"
-    assert not window.ctx.access.run(lambda e: e.queries.exists("qryRuhe"))
+    assert window.ctx.access.run(lambda e: e.tables.count_records("Bestellungen")) == before, "nichts gelöscht"
     record = window.ctx.storage.list_tasks(limit=1)[0]
-    assert record.status == "blockiert" and "Lernprogramm" in (record.error or "")
+    assert record.status == "blockiert" and "löschende" in (record.error or "")
     assert window.overlay.state == "error" and window.tray_state == "error"
     qtbot.wait(3500)
     assert window.overlay.state == "error", "Rot bleibt stehen, bis die nächste Aufgabe startet"
@@ -178,71 +179,42 @@ def test_background_mode_opens_no_dialog_no_toast_and_keeps_red_dot(app_window: 
     assert toasts == []
 
 
-def test_background_alt_w_without_approval_sends_nothing_to_the_ai(app_window: Any, qtbot: Any, tmp_path: Path,
-                                                                    monkeypatch: pytest.MonkeyPatch) -> None:
-    """Alt+W im Hintergrund ohne Freigabe: angehalten, BEVOR eine (bezahlte) KI-Anfrage gesendet wird."""
+def test_background_alt_w_runs_directly_without_any_approval(app_window: Any, qtbot: Any, tmp_path: Path,
+                                                               monkeypatch: pytest.MonkeyPatch) -> None:
+    """Alt+W im Hintergrund: keine Freigabe, keine Rückfrage – beliebiger Dateiname, Ergebnis geprüft, kein Fenster."""
     from app.tasks.models import CapturedTask
 
     window, provider, _ = app_window
-    db = tmp_path / "02011_1.accdb"
+    db = tmp_path / "Irgendein Name (Kopie) 2.accdb"
     window.ctx.access.create_database(str(db), sampledb.populate)
-    task = CapturedTask(text="Sortieren Sie die Tabelle Kunden.", method="tecomp", source="tecomptraining.exe",
-                        db_path=str(db))
+    provider.responses.append(solution([{"action": {"action": "create_query", "name": "qryDirekt",
+                                                    "sql": "SELECT Nachname FROM Kunden"}}]))
+    task = CapturedTask(text="Erstellen Sie die Abfrage qryDirekt mit allen Nachnamen.", method="tecomp",
+                        source="tecomptraining.exe", db_path=str(db))
     monkeypatch.setattr(window.ctx.reader, "from_window", lambda: task)
     window.hide()
     window.capture_task(then="execute")
-    qtbot.waitUntil(lambda: not window._busy and bool(window.ctx.storage.list_tasks(limit=1)), timeout=30000)
+    qtbot.waitUntil(lambda: not window._busy and window._prepared is None
+                    and bool(window.ctx.storage.list_tasks(limit=1))
+                    and window.ctx.storage.list_tasks(limit=1)[0].status not in ("erkannt", "geplant", "läuft"),
+                    timeout=60000)
     record = window.ctx.storage.list_tasks(limit=1)[0]
-    assert record.status == "blockiert" and provider.requests == [], "keine KI-Kosten ohne Freigabe"
-    assert window.overlay.state == "error" and not window.isVisible()
+    assert record.status == "erfolgreich", record.error
+    assert window.ctx.access.run(lambda e: e.queries.exists("qryDirekt"))
+    assert window.overlay.state == "done" and not window.isVisible()
 
 
-def test_dashboard_approves_and_revokes_a_learning_program(app_window: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Einmalige, bewusste Freigabe im Dashboard; dauerhaft gespeichert, sichtbar mit Ablaufzeit, widerrufbar."""
-    from app.security import programs
+def test_no_approval_system_left_and_old_settings_still_load() -> None:
+    """Das 24-Stunden-Freigabesystem ist entfernt; gespeicherte Einstellungen älterer Versionen laden trotzdem."""
+    import json
 
-    window, _, _ = app_window
-    fake = [programs.Program("Kap.02", "DA - Tabellen", ("02*",)), programs.Program("Kap.04", "DA - Formulare", ("03*",))]
-    monkeypatch.setattr(programs, "load_programs", lambda install=None: fake)
-    monkeypatch.setattr("app.ui.main_window.tecomp.open_access_database", lambda: "")
-    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
-    window._programs = None
-    window.program_combo.clear()
-    window.refresh_programs()
-    assert window.program_combo.count() == 2 and "Kein Lernprogramm freigegeben" in window.program_info.text()
-    window.program_combo.setCurrentIndex(window.program_combo.findData("Kap.02"))
-    window.approve_program()
-    saved = window.ctx.storage.load_settings().security.program_approvals
-    assert [(a.program_id, a.active()) for a in saved] == [("Kap.02", True)]
-    assert "„DA - Tabellen“ freigegeben bis" in window.program_info.text()
-    window.revoke_program()
-    assert not window.ctx.storage.load_settings().security.program_approvals[0].active()
-    assert "Kein Lernprogramm freigegeben" in window.program_info.text()
+    from app.core.settings import AppSettings
+    from app.ui.main_window import MainWindow
 
-
-def test_dashboard_assigns_any_open_database_once(app_window: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Beliebiger Dateiname: einmal im Dashboard zuordnen → gespeichert → mit der 24-h-Freigabe ohne Rückfrage."""
-    from app.security import programs
-
-    window, _, _ = app_window
-    fake = [programs.Program("Kap.06", "DA - Abfragen", ("06*",)), programs.Program("WS:CD-Sammlung", "Workshop CD-Sammlung", ())]
-    monkeypatch.setattr(programs, "load_programs", lambda install=None: fake)
-    open_db = str(tmp_path / "Meine Übung" / "Datenbank1.accdb")
-    monkeypatch.setattr("app.ui.main_window.tecomp.open_access_database", lambda: open_db)
-    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
-    window._programs = None
-    window.program_combo.clear()
-    window.refresh_programs()
-    assert "nicht eindeutig zugeordnet" in window.program_info.text()
-    assert window.ctx.pipeline.approval_source(open_db) == (False, "")
-    window.program_combo.setCurrentIndex(window.program_combo.findData("Kap.06"))
-    window.assign_open_database()
-    saved = window.ctx.storage.load_settings().security.program_assignments
-    assert saved == {programs.file_key(open_db): "Kap.06"}
-    assert "DA - Abfragen (zugeordnet)" in window.program_info.text()
-    window.approve_program()
-    covered, source = window.ctx.pipeline.approval_source(open_db)
-    assert covered and "DA - Abfragen" in source
-    assert window.ctx.pipeline.approval_source(str(tmp_path / "anderer Ordner" / "Datenbank1.accdb")) == (False, "")
-    window.unassign_open_database()
-    assert window.ctx.storage.load_settings().security.program_assignments == {}
+    assert not any(hasattr(MainWindow, n) for n in ("approve_all", "revoke_all", "refresh_programs", "remove_trusted"))
+    old = AppSettings().model_dump()
+    old["security"] |= {"program_approvals": [{"program_id": "*", "caption": "Alle", "approved_at": "x",
+                                               "expires_at": "y"}], "program_assignments": {"c:\\a.accdb": "*"},
+                        "trusted_databases": ["c:\\a.accdb"]}
+    loaded = AppSettings.model_validate_json(json.dumps(old))
+    assert not hasattr(loaded.security, "program_approvals") and loaded.security.block_in_exam_mode

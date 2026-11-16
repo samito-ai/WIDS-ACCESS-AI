@@ -45,11 +45,6 @@ def test_compact_mode_runs_whole_task_without_main_window(compact: Any, qtbot: A
     provider.responses.append(solution([{"action": {"action": "create_query", "name": "qryKompakt",
                                                     "sql": "SELECT Nachname FROM Kunden"}}]))
     parents = []
-    from app.security import programs
-
-    tables = programs.Program("Kap.02", "DA - Tabellen", ("02*",))
-    window.ctx.pipeline._program_lookup = lambda path: tables
-    programs.approve(window.ctx.settings.security.program_approvals, tables)  # einmal im Dashboard freigegeben
     window._approval_dialog = lambda request: parents.append(window._dialog_parent()) or ApprovalDecision()
     window.ctx.reader.from_window = lambda: CapturedTask(  # type: ignore[method-assign]
         text="Erstellen Sie die Abfrage qryKompakt mit allen Nachnamen.", method="tecomp",
@@ -57,7 +52,7 @@ def test_compact_mode_runs_whole_task_without_main_window(compact: Any, qtbot: A
     window.compact.btn_solve.click()  # entspricht Alt+W
     qtbot.waitUntil(lambda: "Erfolgreich" in window.compact.status.text(), timeout=60000)
     assert not window.isVisible(), "kein Wechsel ins große Fenster"
-    assert parents == [], "ohne Dashboard kein Freigabedialog – die Lernprogramm-Freigabe gilt"
+    assert parents == [], "ohne Dashboard kein Freigabedialog – Alt+W genügt"
     assert window.ctx.access.path.lower() == str(db).lower(), "mit der Datenbank der Aufgabe verbunden"
     assert window.ctx.access.run(lambda e: e.queries.exists("qryKompakt"))
     log = [window.compact.log.item(i).text() for i in range(window.compact.log.count())]

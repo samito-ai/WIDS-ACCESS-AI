@@ -1,7 +1,9 @@
 """Task Analyzer: lässt die KI eine Aufgabenstellung in Analyse + validierten Lösungsplan übersetzen."""
 from __future__ import annotations
 
+import hashlib
 import threading
+import time
 
 from pydantic import BaseModel
 
@@ -30,10 +32,34 @@ class SqlRepair(BaseModel):
     reason: str = ""
 
 
+#: Eine Analyse desselben unveränderten Inhalts (Aufgabe, Abbildungen, Datenbankstruktur, Kontext, Modell) wird so
+#: lange wiederverwendet – z. B. Alt+W nach einer Sperre, Planfreigabe im Dashboard nach einem Hintergrund-Halt
+ANALYSIS_CACHE_SECONDS = 30 * 60
+_ANALYSIS_CACHE_SIZE = 8
+
+
 class TaskAnalyzer:
     def __init__(self, ai: ProviderManager, validator: PlanValidator | None = None) -> None:
         self._ai = ai
         self._validator = validator or PlanValidator()
+        self._cache: dict[str, tuple[float, AgentSolution]] = {}
+        self._cache_lock = threading.Lock()
+
+    def clear_cache(self) -> None:
+        """Nach einem nicht erfolgreichen Lauf: dieselbe Aufgabe soll neu (evtl. anders) geplant werden."""
+        with self._cache_lock:
+            self._cache.clear()
+
+    def _cache_key(self, message: ChatMessage, schema: DatabaseSchema | None) -> str:
+        digest = hashlib.sha256()
+        # vollständige Struktur (der Prompt kürzt lange Objektlisten) – jede Änderung der Datenbank = neue Analyse
+        full_schema = schema.model_dump_json() if schema is not None else ""
+        for part in (self._ai.settings.ai.provider, self._ai.model_for("analyse"), prompts.ANALYSIS_SYSTEM,
+                     message.content, full_schema):
+            digest.update(str(part).encode("utf-8", "replace") + b"\0")
+        for image in message.images:
+            digest.update(hashlib.sha256(image.data).digest())
+        return digest.hexdigest()
 
     @property
     def available(self) -> bool:
@@ -92,8 +118,15 @@ class TaskAnalyzer:
                     "Datenbank, trage ihre Nummer in analysis.manual_requirements ein."
                 )
 
+        key = self._cache_key(message, schema)
+        now = time.monotonic()
+        with self._cache_lock:
+            hit = self._cache.get(key)
+        if hit is not None and now - hit[0] < ANALYSIS_CACHE_SECONDS:
+            log.info("Analyse unveränderten Inhalts wiederverwendet (keine KI-Anfrage)")
+            return hit[1].model_copy(deep=True)
         try:
-            return self._ai.complete_json(
+            solution = self._ai.complete_json(
                 AgentSolution,
                 messages=[message],
                 system=prompts.ANALYSIS_SYSTEM,
@@ -105,6 +138,12 @@ class TaskAnalyzer:
         except ResponseFormatError:
             log.warning("Analyse lieferte auch nach Korrekturen keinen gültigen Plan")
             raise
+        with self._cache_lock:
+            self._cache = {k: v for k, v in self._cache.items() if now - v[0] < ANALYSIS_CACHE_SECONDS}
+            while len(self._cache) >= _ANALYSIS_CACHE_SIZE:
+                self._cache.pop(next(iter(self._cache)))
+            self._cache[key] = (now, solution.model_copy(deep=True))
+        return solution
 
     def repair_sql(
         self, *, schema: DatabaseSchema, requirement: str, sql: str, error: str, cancel: threading.Event | None = None
@@ -135,6 +174,7 @@ class TaskAnalyzer:
         verified: list[str] | None = None,
         schema_before: DatabaseSchema | None = None,
         images: list[bytes] | None = None,
+        sources: str = "",
     ) -> RequirementReport:
         """Lässt jede Anforderung gegen den tatsächlichen Datenbankzustand prüfen (unabhängig vom Plan).
         ``verified``: vom Verifier in der Datenbank bestätigte Datenschritte (Belege für Datenanforderungen)."""
@@ -143,6 +183,8 @@ class TaskAnalyzer:
             task_text, requirements, schema_after.to_prompt_text(max_queries=80), changes, verified or [])
         if schema_before is not None:
             content += "\n\nFORMULARE UND BERICHTE VOR DER BEARBEITUNG:\n" + _object_prompt(schema_before)
+        if sources:  # z. B. „Feldnamen aus Excel übernehmen“ ist nur mit den Spaltenüberschriften der Datei prüfbar
+            content += "\n\n" + sources
         if images:
             content += "\n\nDie angehängten te.comp-Abbildungen zeigen das erwartete Ergebnis der Aufgabenstellung."
         report = self._ai.complete_json(

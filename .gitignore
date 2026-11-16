@@ -54,3 +54,6 @@ desktop.ini
 
 # Interne Entwicklungsunterlagen (nicht veröffentlichen)
 intern/
+
+# Archiv alter Builds (nicht veröffentlichen)
+archiv/

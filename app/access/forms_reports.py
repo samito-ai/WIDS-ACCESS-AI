@@ -103,6 +103,8 @@ _PAPER_NAMES = {v: k for k, v in _PAPER.items()}
 #: „Seite einrichten“-Werte im Bericht (Report.Printer) – gelesen für Prüfung und Schema
 #: Printer.ItemLayout – gemessen über die Druckreihenfolge im PDF-Export (14.11.2026): 1953 = Name02 neben Name01
 #: (acPRHorizontalColumnLayout, erst quer), 1954 = Name11 oben in Spalte 2 (acPRVerticalColumnLayout, erst nach unten)
+#: Standardbreiten beim Anlegen eines Formulars (Beschriftungs-/Feldspalte) – Bezug für „Spalte verschmälern“
+DEFAULT_LABEL_WIDTH_CM, DEFAULT_CONTROL_WIDTH_CM = 3.8, 6.0
 ACROSS_THEN_DOWN = 1953
 DOWN_THEN_ACROSS = 1954
 PRINTER_KEYS = ("Orientation", "PaperSize", "TopMargin", "BottomMargin", "LeftMargin", "RightMargin", "DefaultSize",
@@ -220,6 +222,68 @@ def _access_color(hex_color: str) -> int:
     """"#RRGGBB" → Access-Farbwert (BGR als Zahl)."""
     r, g, b = (int(hex_color[i:i + 2], 16) for i in (1, 3, 5))
     return r + g * 256 + b * 65536
+
+
+_SECTION_INDEX = {"detail": c.AC_DETAIL, "report_header": c.AC_HEADER, "report_footer": c.AC_FOOTER,
+                  "page_header": c.AC_PAGE_HEADER, "page_footer": c.AC_PAGE_FOOTER}
+_SECTION_LABELS = {c.AC_DETAIL: "Detailbereich", c.AC_HEADER: "Kopf", c.AC_FOOTER: "Fuß",
+                   c.AC_PAGE_HEADER: "Seitenkopf", c.AC_PAGE_FOOTER: "Seitenfuß"}
+
+
+def section_index(name: str, group: int = 0) -> int:
+    """Access-Bereichsnummer: detail 0, Kopf/Fuß 1/2, Seitenkopf/-fuß 3/4, Gruppenkopf/-fuß 5+2n/6+2n."""
+    if name == "group_header":
+        return c.AC_GROUP_LEVEL1_HEADER + 2 * group
+    if name == "group_footer":
+        return c.AC_GROUP_LEVEL1_FOOTER + 2 * group
+    return _SECTION_INDEX[name]
+
+
+def color_hex(value: Any) -> str:
+    """Access-Farbwert (BGR) → "#RRGGBB"; negative Werte sind System-/Designfarben."""
+    number = int(value)
+    if number < 0:
+        return "Systemfarbe"
+    return f"#{number & 0xFF:02X}{(number >> 8) & 0xFF:02X}{(number >> 16) & 0xFF:02X}"
+
+
+def _apply_section_colors(obj: Any, colors: list[Any]) -> None:
+    for spec in colors:
+        try:
+            area = section(obj, section_index(spec.section, spec.group))
+        except Exception as exc:
+            raise AccessError(f"Den Bereich „{spec.section}“ gibt es in „{obj.Name}“ nicht.") from exc
+        if spec.back_color:
+            area.BackColor = _access_color(spec.back_color)
+        if spec.alternate_back_color:
+            area.AlternateBackColor = _access_color(spec.alternate_back_color)
+
+
+def section_colors(obj: Any) -> dict[int, tuple[str, str]]:
+    """Bereichsnummer → (Hintergrund, alternativer Hintergrund) aller vorhandenen Bereiche."""
+    result: dict[int, tuple[str, str]] = {}
+    for index in range(0, 25):
+        try:
+            area = section(obj, index)
+            back = color_hex(area.BackColor)
+        except Exception:
+            continue
+        try:  # Seitenkopf/-fuß haben keine alternative Farbe – der Hintergrund zählt trotzdem
+            alternate = color_hex(area.AlternateBackColor)
+        except Exception:
+            alternate = "(nicht verfügbar)"
+        result[index] = (back, alternate)
+    return result
+
+
+def describe_section_colors(obj: Any) -> str:
+    """„Detailbereich: Hintergrund #FFFFFF, alternativ #F2F2F2; …“ – für Schema, Prüfung und Bericht."""
+    parts = []
+    for index, (back, alternate) in section_colors(obj).items():
+        label = _SECTION_LABELS.get(index) or (f"Gruppenkopf {(index - 5) // 2 + 1}" if index % 2 else
+                                              f"Gruppenfuß {(index - 6) // 2 + 1}")
+        parts.append(f"{label}: Hintergrund {back}, alternativ {alternate}")
+    return "; ".join(parts)
 
 
 def _apply_format(control: Any, spec: ControlSpec) -> None:
@@ -441,7 +505,7 @@ class FormReportOps:
         """Legt die Steuerelemente an; liefert je Spezifikation die Namen (Feld + Beschriftung)."""
         created: list[tuple[ControlSpec, list[str]]] = []
         base_label_left, base_control_left = _cm(0.5), _cm(4.5)
-        label_width, control_width = _cm(3.8), _cm(6.0)
+        label_width, control_width = _cm(DEFAULT_LABEL_WIDTH_CM), _cm(DEFAULT_CONTROL_WIDTH_CM)
         row_height, gap = _cm(0.6), _cm(0.2)
         cursor: dict[tuple[int, int], int] = {}
         for ctl in controls:
@@ -768,6 +832,8 @@ class FormReportOps:
         ``form=True``: dasselbe in einem Formular (report_header/-footer = Formularkopf/-fuß). ``join_row``: beim Ändern
         eines tabellarischen Berichts (alle Felder des Bereichs in EINER Zeile) kommt ein neues Feld mit Links-Angabe in
         diese Zeile statt darunter – Überdeckungen löst danach die Zeilen-Neuordnung."""
+        if ctl.name and ctl.name.lower() in used:  # sonst entstünde still „Name_2“ neben dem alten Steuerelement
+            raise ObjectExistsError("Steuerelement", f"{ctl.name} – vorhandene Steuerelemente mit control_changes ändern")
         create = app.CreateControl if form else app.CreateReportControl
         fixed = {"report_header": c.AC_HEADER, "report_footer": c.AC_FOOTER, "page_header": c.AC_PAGE_HEADER,
                  "page_footer": c.AC_PAGE_FOOTER, "detail": c.AC_DETAIL}
@@ -959,13 +1025,15 @@ class FormReportOps:
                         levels = [group_level(report, i) for i in range(len(levels) + 1)]
                     level = levels[index]
                     level.SortOrder = group.sort == "DESC"
-                    if group.keep_together:
-                        level.KeepTogether = 1
-                    if group.new_page:
-                        if bool(level.GroupHeader):
-                            section(report, c.AC_GROUP_LEVEL1_HEADER + 2 * index).ForceNewPage = 1
-                        else:
-                            section(report, c.AC_GROUP_LEVEL1_FOOTER + 2 * index).ForceNewPage = 2
+                    level.KeepTogether = 1 if group.keep_together else 0
+                    if not group.new_page:  # „aus“: Seitenumbruch in Kopf UND Fuß entfernen
+                        for part in (c.AC_GROUP_LEVEL1_HEADER, c.AC_GROUP_LEVEL1_FOOTER):
+                            with contextlib.suppress(Exception):
+                                section(report, part + 2 * index).ForceNewPage = 0
+                    elif bool(level.GroupHeader):
+                        section(report, c.AC_GROUP_LEVEL1_HEADER + 2 * index).ForceNewPage = 1
+                    else:
+                        section(report, c.AC_GROUP_LEVEL1_FOOTER + 2 * index).ForceNewPage = 2
                 if spec.record_source is not None:
                     report.RecordSource = spec.record_source
                 if spec.hide_detail is not None:
@@ -1001,6 +1069,7 @@ class FormReportOps:
                 _reflow_overlapping_rows(report, before, touched)
                 if spec.width_cm is not None:  # nach den Steuerelementen: schmäler geht nur, wenn sie hineinpassen
                     report.Width = _cm(spec.width_cm)
+                _apply_section_colors(report, spec.section_colors)
                 app.DoCmd.Save(c.AC_REPORT, name)
                 saved = True
             finally:
@@ -1120,6 +1189,7 @@ class FormReportOps:
                 self._change_controls(app, form, name, spec.control_changes, [], c.AC_FORM)
                 if spec.tab_control:
                     self._add_tab_control(app, form, name, spec.tab_control)
+                _apply_section_colors(form, spec.section_colors)
                 app.DoCmd.Save(c.AC_FORM, name)
                 saved = True
             finally:
@@ -1254,8 +1324,12 @@ class FormReportOps:
                     setattr(info, target, int(getattr(control, attr)))
             with contextlib.suppress(Exception):
                 info.parent = str(control.Parent.Name)
-            # Access liefert „Formular.frmX“/„Bericht.rptX“ (lokalisiert) – nur der Objektname zählt
-            info.navigation_target = info.navigation_target.split(".", 1)[-1]
+            # Access liefert „Formular.frmX“/„Bericht.rptX“ (lokalisiert) – der Präfix ist der Zieltyp (gemessen:
+            # NavigationTargetType liefert dafür keinen verlässlichen Wert), der Rest der Objektname
+            prefix, _, name = info.navigation_target.rpartition(".")
+            info.navigation_target = name
+            info.navigation_kind = {"form": "form", "formular": "form", "report": "report", "bericht": "report"}.get(
+                prefix.lower(), "") if name else ""
             parts = []
             with contextlib.suppress(Exception):
                 if bool(control.FontBold):
@@ -1263,6 +1337,13 @@ class FormReportOps:
             with contextlib.suppress(Exception):
                 if bool(control.FontItalic):
                     parts.append("kursiv")
+            with contextlib.suppress(Exception):
+                if not bool(control.Visible):
+                    parts.append("unsichtbar")
+            with contextlib.suppress(Exception):
+                fore = int(control.ForeColor)
+                if fore > 0 and fore != 0x404040:  # Schwarz bzw. #404040 (Access-Design) = Standard, negativ = System
+                    parts.append(f"Schrift #{fore & 255:02X}{(fore >> 8) & 255:02X}{(fore >> 16) & 255:02X}")
             with contextlib.suppress(Exception):
                 if int(control.BackStyle) == 1 and kind in (c.AC_TEXT_BOX, c.AC_LABEL, c.AC_COMBO_BOX):
                     back = int(control.BackColor)
@@ -1315,6 +1396,9 @@ class FormReportOps:
                     with contextlib.suppress(Exception):
                         if getattr(form, prop) and bool(getattr(form, f"{prop}OnLoad")):
                             info.properties[prop] = str(getattr(form, prop))
+                with contextlib.suppress(Exception):
+                    info.properties["Bereichsfarben"] = describe_section_colors(form)
+                    info.section_colors = section_colors(form)
                 return info
             finally:
                 if not already_open:
@@ -1364,6 +1448,9 @@ class FormReportOps:
                         info.properties["Detailbereich"] = "ausgeblendet"
                 with contextlib.suppress(Exception):
                     info.properties["Seite"] = _describe_page(self._printer_values(report), int(report.Width))
+                with contextlib.suppress(Exception):
+                    info.properties["Bereichsfarben"] = describe_section_colors(report)
+                    info.section_colors = section_colors(report)
                 return info
             finally:
                 if not already_open:

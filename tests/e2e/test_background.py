@@ -80,19 +80,10 @@ def test_starts_in_tray_without_any_window(background: Any) -> None:
     assert window.tray_state == "idle" and "bereit" in window.tray.toolTip()
 
 
-def _approve_program(window: MainWindow) -> None:
-    """24-h-Freigabe eines Lernprogramms, dem die Testdatei zugeordnet wird (wie im Dashboard bestätigt)."""
-    from app.security import programs
-
-    tables = programs.Program("Kap.02", "DA - Tabellen", ("02*",))
-    window.ctx.pipeline._program_lookup = lambda path: tables
-    programs.approve(window.ctx.settings.security.program_approvals, tables)
-
-
 @pytest.mark.access
-def test_alt_w_solves_approved_exercise_without_window_or_focus_change(background: Any, qtbot: Any, tmp_path: Path) -> None:
-    """Lernprogramm einmal freigegeben → Alt+W bearbeitet die Übung vollständig: kein Dialog, kein Fenster, kein
-    Fokuswechsel; Statuspunkt gelb → grün."""
+def test_alt_w_solves_exercise_without_window_or_focus_change(background: Any, qtbot: Any, tmp_path: Path) -> None:
+    """Alt+W (bewusste Benutzeraktion, keine weitere Freigabe) bearbeitet die Übung vollständig: kein Dialog, kein
+    Fenster, kein Fokuswechsel; Statuspunkt gelb → grün."""
     window, provider, seen = background
     db = tmp_path / "hintergrund.accdb"
     window.ctx.access.create_database(str(db), sampledb.populate)
@@ -100,7 +91,6 @@ def test_alt_w_solves_approved_exercise_without_window_or_focus_change(backgroun
     provider.responses.append(solution([{"action": {"action": "create_query", "name": "qryHintergrund",
                                                     "sql": "SELECT Nachname FROM Kunden"}}]))
     approvals: list[Any] = []
-    _approve_program(window)
     window._approval_dialog = lambda request: approvals.append(request) or ApprovalDecision()
     window.ctx.reader.from_window = lambda: CapturedTask(  # type: ignore[method-assign]
         text=TASK, method="tecomp", source="tecomptraining.exe", db_path=str(db))
@@ -112,7 +102,7 @@ def test_alt_w_solves_approved_exercise_without_window_or_focus_change(backgroun
     assert window.tray_state == "ok", window.task_status.text()
     assert window.overlay.state == "done", "„Done“ nach geprüfter Ausführung"
     assert "running" in states, "während der Arbeit zeigt das Symbol „läuft“"
-    assert approvals == [], "keine Routinebestätigung – die Lernprogramm-Freigabe gilt"
+    assert approvals == [], "keine Routinebestätigung – Alt+W genügt"
     assert visible_windows() == [] and seen["activated"] == [] and seen["boxes"] == []
     assert window.ctx.access.run(lambda e: e.queries.exists("qryHintergrund"))
     record = window.ctx.storage.list_tasks(limit=1)[0]
@@ -120,16 +110,13 @@ def test_alt_w_solves_approved_exercise_without_window_or_focus_change(backgroun
 
 
 @pytest.mark.access
-def test_review_when_requirements_not_confirmed_and_trusted_database(background: Any, qtbot: Any, tmp_path: Path) -> None:
-    """Nicht bestätigte Anforderung → „Review“ (rot), nie „Done“. Gemerkte Übungsdatenbank → keine Freigabe nötig.
-    Löschender Plan im Hintergrund → angehalten (rot), kein Dialog, nichts gelöscht."""
-    from app.agent.orchestrator import trust_key
-
+def test_review_when_requirements_not_confirmed_and_destructive_stops(background: Any, qtbot: Any, tmp_path: Path) -> None:
+    """Nicht bestätigte Anforderung → „Review“ (rot), nie „Done“. Löschender Plan im Hintergrund → angehalten (rot),
+    kein Dialog, nichts gelöscht."""
     window, provider, seen = background
     db = tmp_path / "eigene_uebung.accdb"
     window.ctx.access.create_database(str(db), sampledb.populate)
     window.ctx.access.disconnect()
-    window.ctx.settings.security.trusted_databases = [trust_key(str(db))]  # früher im Dashboard gemerkt
     approvals: list[Any] = []
     asked: list[Any] = []
     window._approval_dialog = lambda request: approvals.append(request) or ApprovalDecision()

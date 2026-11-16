@@ -25,6 +25,10 @@ from app.tasks import models as m
 log = get_logger(__name__)
 
 
+#: so viele Datensätze werden beim Ergebnisvergleich gespeicherte ↔ verlangte Abfrage höchstens gelesen
+_COMPARE_LIMIT = 50_000
+
+
 class Check(BaseModel):
     name: str
     passed: bool
@@ -323,6 +327,12 @@ class ResultVerifier:
             return
         v.add("Gleiche Felder", [f.name for f in source.fields] == [f.name for f in copy.fields])
         v.add("Gleicher Primärschlüssel", source.primary_key == copy.primary_key)
+        # alle Feldeigenschaften (Typ, Größe, Gültigkeit, Format, Nachschlagefeld …) wie im Original
+        differs = [f.name for f in source.fields if (other := copy.field(f.name)) is not None
+                   and f.model_dump(exclude={"ordinal"}) != other.model_dump(exclude={"ordinal"})]
+        v.add("Gleiche Feldeigenschaften", not differs, ", ".join(differs))
+        v.add("Gleiche Tabellen-Gültigkeitsregel", source.validation_rule == copy.validation_rule,
+              copy.validation_rule or "(keine)")
         expected = e.tables.count_records(a.source) if a.with_data else 0
         actual = e.tables.count_records(new)
         v.add("Datensatzanzahl", actual == expected, f"{actual} (erwartet {expected})")
@@ -450,8 +460,11 @@ class ResultVerifier:
         for col, cap in spec.captions.items():
             v.add(f"Beschriftung „{col}“", str(get_property(fields[col.lower()], "Caption", "")) == cap, cap)
         if spec.alternate_back_color:
-            v.add("Alternative Zeilenfarbe", get_property(obj, "DatasheetAlternateBackColor", None) is not None,
-                  spec.alternate_back_color)
+            from app.access.forms_reports import color_hex
+
+            raw = get_property(obj, "DatasheetAlternateBackColor", None)
+            actual = color_hex(raw) if raw is not None else "(keine)"
+            v.add("Alternative Zeilenfarbe", actual.lower() == spec.alternate_back_color.lower(), actual)
 
     # ------------------------------------------------------------------ Daten
     def _verify_export_data(self, e: AccessEngine, a: m.ExportData, r: StepResult, v: Verification) -> None:
@@ -490,6 +503,7 @@ class ResultVerifier:
 
     def _verify_modify_report(self, e: AccessEngine, a: m.ModifyReport, r: StepResult, v: Verification) -> None:
         info = e.objects.inspect_report(a.name)
+        _check_section_colors(info, a.changes.section_colors, v)
         spec = a.changes
         if spec.record_source is not None:
             v.add("Datenquelle des Berichts", _same_source(info.record_source, spec.record_source), info.record_source)
@@ -503,8 +517,13 @@ class ResultVerifier:
         for group in spec.groups:
             found = next((g for g in info.group_levels if g.expression.strip("[]=").lower() == group.field.lower()), None)
             v.add(f"Gruppe „{group.field}“", found is not None)
-            if found is not None and group.new_page:
-                v.add(f"Neue Seite je „{group.field}“", found.new_page)
+            if found is not None:  # jede verlangte Einstellung nachlesen, auch „aus“
+                v.add(f"Neue Seite je „{group.field}“" + ("" if group.new_page else " – nein"),
+                      found.new_page == group.new_page)
+                v.add(f"Sortierung „{group.field}“", found.sort_descending == (group.sort == "DESC"),
+                      "absteigend" if found.sort_descending else "aufsteigend")
+                v.add(f"Zusammenhalten „{group.field}“" + ("" if group.keep_together else " – nein"),
+                      found.keep_together == group.keep_together)
         self._check_control_edits(info.controls, spec.controls, spec.control_changes, spec.delete_controls, v)
         if spec.width_cm is not None:
             width = e.objects.page_setup(a.name)["Width"]
@@ -548,6 +567,7 @@ class ResultVerifier:
 
     def _verify_modify_form(self, e: AccessEngine, a: m.ModifyForm, r: StepResult, v: Verification) -> None:
         info = e.objects.inspect_form(a.name)
+        _check_section_colors(info, a.changes.section_colors, v)
         spec = a.changes
         if spec.caption is not None:
             v.add("Titel des Formulars", info.caption == spec.caption, info.caption)
@@ -577,10 +597,15 @@ class ResultVerifier:
     def _check_control_edits(controls: list[Any], added: list[Any], changes: list[Any], deleted: list[str],
                              v: Verification) -> None:
         sources = {x.control_source.replace(" ", "").lower() for x in controls if x.control_source}
-        for ctl in added:
-            if ctl.type == "text_box" and ctl.expression:
-                v.add(f"Steuerelement {ctl.expression}", ctl.expression.replace(" ", "").lower() in sources)
         by_name = {x.name.lower(): x for x in controls}
+        for ctl in added:
+            named = by_name.get(ctl.name.lower()) if ctl.name else None
+            if ctl.name:  # genau DIESES Steuerelement – nicht irgendeins mit gleichem Inhalt (z. B. „…_2“)
+                v.add(f"Steuerelement „{ctl.name}“", named is not None)
+            if ctl.type == "text_box" and ctl.expression:
+                matches = (named is not None and _same_source(named.control_source, ctl.expression)) if ctl.name \
+                    else ctl.expression.replace(" ", "").lower() in sources
+                v.add(f"Steuerelement {ctl.expression}", matches)
         for change in changes:
             found = by_name.get(change.name.lower())
             v.add(f"Steuerelement „{change.name}“", found is not None)
@@ -593,6 +618,8 @@ class ResultVerifier:
             if found is not None and change.control_source is not None:
                 v.add(f"Inhalt „{change.name}“", _same_source(found.control_source, change.control_source),
                       found.control_source)
+            if found is not None:
+                _check_control_details(found, change, v)
             if found is None or found.control_type not in (c.AC_TEXT_BOX, c.AC_COMBO_BOX):
                 continue  # diese Merkmale liest inspect nur bei Text-/Kombinationsfeldern
             flags = found.formatting.split(", ")
@@ -613,28 +640,66 @@ class ResultVerifier:
 
     def _verify_set_conditional_format(self, e: AccessEngine, a: m.SetConditionalFormat, r: StepResult, v: Verification) -> None:
         rules = e.objects.conditional_formats(a.object_type, a.name).get(a.control, [])
-        v.add("Formatierungsregeln vorhanden", len(rules) >= len(a.rules), "; ".join(rules)[:300])
-        for rule in a.rules:
-            needle = "Datenbalken" if rule.data_bar else rule.expression or rule.value or ""
-            v.add(f"Regel „{needle}“", any(needle.replace(" ", "").lower() in x.replace(" ", "").lower() for x in rules))
+        exact = bool(getattr(a, "replace", False))  # ersetzen: genau diese Regeln, keine alten übrig
+        v.add("Formatierungsregeln vorhanden", len(rules) == len(a.rules) if exact else len(rules) >= len(a.rules),
+              "; ".join(rules)[:300])
+        def norm(text: str) -> str:
+            return "".join(ch for ch in text.lower() if ch not in " \"'")
+
+        used: set[int] = set()
+        for rule in a.rules:  # jede verlangte Regel = EINE eigene gespeicherte Regel mit Bedingung UND ihren Farben
+            if rule.data_bar:
+                needle, exact = "Datenbalken", False
+            elif rule.expression:
+                needle, exact = f"Ausdruck {rule.expression}", True
+            else:
+                needle = f"Feldwert {rule.operator} {rule.value}" + (f" und {rule.value2}" if rule.value2 else "")
+                exact = True
+            colors = [] if rule.data_bar else [f"{label} {color.upper()}" for label, color in
+                                               (("Schrift", rule.fore_color), ("Hintergrund", rule.back_color)) if color]
+
+            def fits(stored: str, needle: str = needle, exact: bool = exact, colors: list[str] = colors) -> bool:
+                condition = stored.split(" → ")[0]
+                same = norm(condition) == norm(needle) if exact else norm(needle) in norm(condition)
+                return same and all(col.upper() in stored.upper() for col in colors)
+
+            match = next((i for i, x in enumerate(rules) if i not in used and fits(x)), None)
+            if match is not None:
+                used.add(match)
+            v.add(f"Regel „{needle}“" + (f" ({', '.join(colors)})" if colors else ""), match is not None,
+                  rules[match] if match is not None else "; ".join(rules)[:300])
 
     def _verify_create_navigation_form(self, e: AccessEngine, a: m.CreateNavigationForm, r: StepResult, v: Verification) -> None:
         info = e.objects.inspect_form(r.final_name or a.name)
         kinds = {ctl.control_type for ctl in info.controls}
         v.add("Navigationssteuerelement", c.AC_NAVIGATION_CONTROL in kinds)
-        targets = {ctl.navigation_target.lower() for ctl in info.controls if ctl.navigation_target}
-        for tab in a.tabs:
-            v.add(f"Registerkarte „{tab.caption}“ → {tab.target}", tab.target.lower() in targets)
+        buttons = [ctl for ctl in info.controls if ctl.navigation_target]
+        for tab in a.tabs:  # je Registerkarte: Beschriftung, Ziel UND Zieltyp an derselben Schaltfläche
+            same = [b for b in buttons if b.caption == tab.caption and b.navigation_target.lower() == tab.target.lower()]
+            found = next((b for b in same if b.navigation_kind == tab.target_type), same[0] if same else None)
+            v.add(f"Registerkarte „{tab.caption}“ → {tab.target}", found is not None)
+            if found is not None:
+                v.add(f"Zieltyp „{tab.caption}“", found.navigation_kind == tab.target_type, found.navigation_kind or "?")
 
     def _verify_import_data(self, e: AccessEngine, a: m.ImportData, r: StepResult, v: Verification) -> None:
         before, inserted = int(r.details.get("count_before", 0)), int(r.details.get("inserted", 0))
         v.add("Tabelle vorhanden", e.tables.table_exists(a.table))
         after = e.tables.count_records(a.table)
         v.add("Datensätze importiert", inserted > 0 and after == before + inserted, f"{before} → {after}")
+        if "source_rows" in r.details:
+            rows = int(r.details["source_rows"])
+            v.add("Alle Zeilen der Quelldatei importiert", inserted == rows, f"{inserted} von {rows}")
+        table = self._table(e, a.table)
+        if table is not None and r.details.get("source"):
+            self._check_first_source_row(e, a, r, table, v)
         for spec in a.fields:
-            info = e.tables.field_type(a.table, spec.name)
-            if r.details.get("created"):
-                v.add(f"Datentyp {spec.name}", info == spec.type, info.value)
+            info = table.field(spec.name) if table else None
+            v.add(f"Feld {spec.name} vorhanden", info is not None)
+            if info is None or not r.details.get("created"):
+                continue
+            v.add(f"Datentyp {spec.name}", info.type == spec.type, info.type.value)
+            if spec.description is not None:
+                v.add(f"Beschreibung {spec.name}", info.description == spec.description, info.description)
 
     def _verify_insert_records(self, e: AccessEngine, a: m.InsertRecords, r: StepResult, v: Verification) -> None:
         before = int(r.details.get("count_before", -1))
@@ -662,6 +727,9 @@ class ResultVerifier:
         v.add("Mindestens ein Datensatz betroffen", affected > 0, critical=False,
               detail="Die Bedingung traf auf keinen Datensatz zu." if affected == 0 else "")
         schema_table = self._table(e, a.table)
+        if "target_keys" in r.details:  # genau die vorher betroffenen Datensätze nachprüfen
+            self._check_updated_rows(e, a, r, schema_table, v)
+            return
         scope = e.tables.count_records(a.table, a.where) if a.where else e.tables.count_records(a.table)
         for key, value in a.values.items():
             info = schema_table.field(key) if schema_table else None
@@ -679,6 +747,76 @@ class ResultVerifier:
                 v.add(f"{info.name} gesetzt", matching_any >= affected, f"{matching_any} Datensätze mit neuem Wert")
             else:
                 v.add(f"{info.name} gesetzt", matching == scope, f"{matching} von {scope}")
+
+    @staticmethod
+    def _check_updated_rows(e: AccessEngine, a: m.UpdateRecords, r: StepResult, table: Any, v: Verification) -> None:
+        """Jeder verlangte Wert in GENAU den Datensätzen, die die Bedingung vor der Änderung traf (Schlüssel)."""
+        key, keys = str(r.details["key_field"]), list(r.details["target_keys"])
+        key_info = table.field(key) if table else None
+        v.add("Geänderte Datensätze = betroffene Datensätze", int(r.details.get("affected", -1)) == len(keys),
+              f"{r.details.get('affected')} geändert, {len(keys)} betroffen")
+        if not keys or key_info is None:
+            return
+        for name, value in a.values.items():
+            info = table.field(name)
+            if info is None:
+                v.add(f"{name} gesetzt", False, "Feld fehlt")
+                continue
+            if isinstance(value, str) and value.startswith("="):
+                v.add(f"{name}: Ausdruck nicht einzeln nachprüfbar", True, value, critical=False)
+                continue
+            if value is None:
+                condition = f"{quote_ident(info.name)} Is Null"
+            elif info.type in (AccessType.SINGLE, AccessType.DOUBLE):
+                condition = f"Abs({quote_ident(info.name)} - {sql_literal(to_dao(value, info.type, info.name))}) < 0.000001"
+            else:
+                condition = f"{quote_ident(info.name)} = {sql_literal(to_dao(value, info.type, info.name))}"
+            matching = 0
+            for start in range(0, len(keys), 200):
+                chunk = ", ".join(sql_literal(to_dao(k, key_info.type, key)) for k in keys[start:start + 200])
+                matching += e.tables.count_records(a.table, f"{quote_ident(key)} In ({chunk}) AND {condition}")
+            v.add(f"{info.name} gesetzt", matching == len(keys), f"{matching} von {len(keys)} betroffenen Datensätzen")
+
+    @staticmethod
+    def _check_first_source_row(e: AccessEngine, a: m.ImportData, r: StepResult, table: Any, v: Verification) -> None:
+        """Quelldatei unabhängig neu lesen: die erste Datenzeile muss mit ihren Werten in den RICHTIGEN Feldern stehen
+        (vertauschte Spalten bestehen die reine Anzahlprüfung)."""
+        from pathlib import Path
+
+        from app.access import importer
+
+        try:
+            rows = importer.read_rows(Path(str(r.details["source"])), delimiter=a.delimiter,
+                                      widths=a.column_widths or None, sheet=a.sheet, has_header=a.has_header)
+        except Exception as exc:  # Quelle nicht mehr lesbar: kein Beleg, aber auch kein Fehler der Ausführung
+            v.add("Erste Zeile der Quelldatei", False, f"nicht lesbar: {exc}", critical=False)
+            return
+        header = rows[0] if a.has_header and rows else None
+        data = rows[1:] if header is not None else rows
+        if not data:
+            return
+        if a.fields:
+            names = [f.name for f in a.fields]
+        elif header is not None and r.details.get("created"):
+            names = [f.name for f in importer.infer_fields(header, data)]  # gleiche Namen wie beim Anlegen
+        elif header is not None:
+            names = [importer.clean_field_name(h, i) for i, h in enumerate(header)]
+        else:
+            return
+        conditions = []
+        for name, value in zip(names, data[0], strict=False):
+            info = table.field(name)
+            if info is None or value in ("", None) or isinstance(value, float | bool) or info.type in (
+                    AccessType.SINGLE, AccessType.DOUBLE, AccessType.LONG_TEXT, AccessType.DATETIME, AccessType.YES_NO):
+                continue  # nur eindeutig vergleichbare Werte (Text, ganze Zahlen)
+            try:
+                conditions.append(f"{quote_ident(info.name)} = {sql_literal(to_dao(value, info.type, info.name))}")
+            except Exception:
+                continue
+        if conditions:
+            found = e.tables.count_records(a.table, " AND ".join(conditions))
+            v.add("Erste Zeile der Quelldatei in den richtigen Feldern", found >= 1,
+                  f"{found} Treffer für {len(conditions)} Werte")
 
     def _verify_delete_records(self, e: AccessEngine, a: m.DeleteRecords, r: StepResult, v: Verification) -> None:
         remaining = e.tables.count_records(a.table, a.where) if a.where else e.tables.count_records(a.table)
@@ -752,13 +890,42 @@ class ResultVerifier:
                     ", ".join(check.fields),
                 )
         if kind in READ_ONLY_KINDS and not check.parameters:
-            _, rows = e.queries.run_select(name, limit=10_000)
+            _, rows = e.queries.run_select(name, limit=_COMPARE_LIMIT)
             v.info["row_count"] = len(rows)
             v.info["sample_rows"] = rows[:5]
             v.info["columns"] = check.fields
             v.add("Abfrage ausführbar", True, f"{len(rows)} Datensätze")
             if a.spec is not None:
                 self._check_sort(a, check.fields, rows, v)
+            self._check_same_result(e, a, stored_sql, rows, v)
+
+    def _check_same_result(self, e: AccessEngine, a: m.CreateQuery, stored_sql: str, rows: list[list[Any]],
+                           v: Verification) -> None:
+        """Weicht das gespeicherte SQL vom verlangten ab (z. B. nach einer SQL-Reparatur), müssen beide über eine eigene
+        DAO-Verbindung dieselben Datensätze liefern – eine still entfernte Bedingung fällt so auf."""
+        from app.agent.executor import AccessExecutor
+
+        try:
+            requested = AccessExecutor().resolve_sql(a, self._schema_of(e))
+        except WidsError:
+            return
+        if requested.strip().rstrip(";") == stored_sql.strip().rstrip(";"):
+            return
+        if len(rows) >= _COMPARE_LIMIT:
+            v.add("Ergebnis wie verlangt", True, f"mehr als {_COMPARE_LIMIT} Datensätze – nicht verglichen", critical=False)
+            return
+        try:
+            _, wanted = e.queries.run_select_isolated(requested, limit=_COMPARE_LIMIT + 1)
+        except WidsError as exc:
+            v.add("Verlangtes Ergebnis vergleichbar", False, f"verlangtes SQL nicht ausführbar: {exc.user_message}",
+                  critical=False)
+            return
+
+        def key(row: list[Any]) -> str:
+            return repr([str(x) for x in row])
+
+        same = sorted(map(key, wanted)) == sorted(map(key, rows))
+        v.add("Ergebnis wie verlangt", same, f"{len(rows)} Datensätze gespeichert, {len(wanted)} verlangt")
 
     @staticmethod
     def _check_sort(a: m.CreateQuery, columns: list[str], rows: list[list[Any]], v: Verification) -> None:
@@ -804,6 +971,24 @@ class ResultVerifier:
         wanted = [*a.form.fields, *(c.field for c in a.form.controls if c.field)]
         missing = [f for f in wanted if f.lower() not in sources]
         v.add("Alle Felder als Steuerelemente vorhanden", not missing, ", ".join(missing))
+        if a.form.layout == "stacked":
+            # je verlangter Feldspalte ein eigenes Layout (Access rastet Positionen im Layout ein – die Spalte zählt)
+            detail: dict[str, list[Any]] = {}
+            for ctl in info.controls:
+                if ctl.control_source and ctl.section == 0:
+                    detail.setdefault(ctl.control_source.lower(), []).append(ctl)
+            columns: dict[int, set[int]] = {}
+            for spec in a.form.controls:
+                found = detail.get((spec.field or "").lower(), []) if spec.section == "detail" else []
+                # nur eindeutige Zuordnung prüfen (dasselbe Feld zweimal = nicht eindeutig, wird übersprungen)
+                if len(found) == 1 and spec.type not in ("subform", "button"):
+                    columns.setdefault(spec.layout_column or 0, set()).add(found[0].layout_id)
+            if len(columns) > 1:
+                ids = [next(iter(s)) for s in columns.values() if len(s) == 1]
+                ok = len(ids) == len(columns) and len(set(ids)) == len(ids) and 0 not in ids
+                v.add("Feldspalten im Steuerelementlayout", ok,
+                      "; ".join(f"Spalte {k + 1}: Layout {sorted(s)}" for k, s in sorted(columns.items())))
+            _check_layout_widths(info, columns, a.form.column_widths_cm, v)
         for spec in (ctl for ctl in a.form.controls if ctl.type == "subform"):
             sub = next((x for x in info.controls if x.source_object.split(".")[-1].lower()
                         == (spec.source_object or "").split(".")[-1].lower()), None)
@@ -829,13 +1014,18 @@ class ResultVerifier:
         groups = [g.expression.strip("[]").lower() for g in info.group_levels if g.has_header or g.has_footer]
         wanted_groups = [g.field.lower() for g in a.report.group_by if g.header or g.footer]
         v.add("Gruppierung", groups == wanted_groups, ", ".join(groups) or "keine")
-        for total in a.report.totals:
+        footers = [c.AC_GROUP_LEVEL1_FOOTER + 2 * i for i, g in enumerate(info.group_levels) if g.has_footer]
+        for total in a.report.totals:  # jede Summe im RICHTIGEN Bereich: je Gruppenfuß und/oder Berichtsfuß
             func = {"sum": "sum", "count": "count", "avg": "avg", "min": "min", "max": "max"}[total.function]
             arg = "*" if total.field == "*" else f"[{total.field.lower()}]"
-            v.add(
-                f"Berechnung {total.function}({total.field})",
-                f"={func}({arg})" in {s.replace(" ", "") for s in sources},
-            )
+            formula = f"={func}({arg})"
+            where = {x.section for x in info.controls if x.control_source.replace(" ", "").lower() == formula}
+            label = f"{total.function}({total.field})"
+            if total.scope in ("group", "both"):
+                v.add(f"Gruppenberechnung {label}", bool(footers) and all(s in where for s in footers),
+                      "kein Gruppenfuß" if not footers else f"in Bereichen {sorted(where)}")
+            if total.scope in ("report", "both"):
+                v.add(f"Gesamtberechnung {label} im Berichtsfuß", c.AC_FOOTER in where, f"in Bereichen {sorted(where)}")
         spec = a.report
         levels = [g for g in info.group_levels if g.has_header or g.has_footer]
         for group, found in zip([g for g in spec.group_by if g.header or g.footer], levels, strict=False):
@@ -865,3 +1055,76 @@ class ResultVerifier:
     def _verify_delete_object(self, e: AccessEngine, a: m.DeleteObject, r: StepResult, v: Verification) -> None:
         exists = e.objects.form_exists if a.object_type == "form" else e.objects.report_exists
         v.add("Objekt entfernt", not exists(a.name), a.name)
+
+
+def _check_layout_widths(info: Any, columns: dict[int, set[int]], wanted: list[float], v: Verification) -> None:
+    """Verlangte Spaltenbreiten je Layout (Beschriftung, Feld) in Access nachmessen. Das Ergebnis mit der Standardbreite
+    beim Anlegen ist zugleich der Beleg für Anforderungen wie „rechte Spalte verschmälern“."""
+    from collections import Counter
+
+    from app.access import constants as c
+    from app.access.forms_reports import DEFAULT_CONTROL_WIDTH_CM, DEFAULT_LABEL_WIDTH_CM
+
+    if not wanted:
+        return
+    measured: list[str] = []
+    ok = True
+    for column, ids in sorted(columns.items()):
+        if len(ids) != 1:
+            continue
+        layout = next(iter(ids))
+        members = [x for x in info.controls if x.layout_id == layout and x.section == 0]
+        for index, labels in enumerate((True, False)):
+            if column * 2 + index >= len(wanted):
+                continue
+            widths = [x.width for x in members if (x.control_type == c.AC_LABEL) == labels and x.control_type != c.AC_EMPTY_CELL]
+            if not widths:
+                continue
+            actual = Counter(widths).most_common(1)[0][0] / c.TWIPS_PER_CM
+            target = wanted[column * 2 + index]
+            ok = ok and abs(actual - target) <= 0.15
+            measured.append(f"Layout {column + 1} {'Beschriftung' if labels else 'Feld'} {actual:.1f} cm (verlangt {target:.1f})")
+    if measured:
+        v.add("Spaltenbreiten im Layout", ok, "; ".join(measured)
+              + f" – Standard beim Anlegen: Beschriftung {DEFAULT_LABEL_WIDTH_CM} cm, Feld {DEFAULT_CONTROL_WIDTH_CM} cm")
+
+
+def _check_section_colors(info: Any, wanted: list[Any], v: Verification) -> None:
+    """Bereichsfarben exakt aus Access nachlesen (Bereich → BackColor/AlternateBackColor). Optisch ähnliche Lösungen –
+    z. B. nur die Steuerelemente eingefärbt oder die Farbe im falschen Bereich – bestehen diese Prüfung nicht."""
+    from app.access.forms_reports import section_index
+
+    for spec in wanted:
+        index = section_index(spec.section, spec.group)
+        back, alternate = info.section_colors.get(index, ("(fehlt)", "(fehlt)"))
+        if spec.back_color:
+            v.add(f"Hintergrundfarbe {spec.section}", back.lower() == spec.back_color.lower(), back)
+        if spec.alternate_back_color:
+            v.add(f"Alternative Hintergrundfarbe {spec.section}", alternate.lower() == spec.alternate_back_color.lower(),
+                  alternate)
+
+
+def _check_control_details(found: Any, change: Any, v: Verification) -> None:
+    """Jede verlangte Steuerelement-Änderung am gespeicherten Steuerelement nachlesen – nicht nur „vorhanden“."""
+    for wanted_cm, actual, label in ((change.width_cm, found.width, "Breite"), (change.height_cm, found.height, "Höhe"),
+                                     (None if found.layout else change.top_cm, found.top, "Lage oben")):
+        if wanted_cm is not None:  # im Steuerelementlayout rastet „oben“ ein – dort zählt die Zeile, nicht der Wert
+            v.add(f"{label} „{change.name}“", abs(actual - wanted_cm * c.TWIPS_PER_CM) < 30,
+                  f"{actual / c.TWIPS_PER_CM:.1f} cm (verlangt {wanted_cm:.1f} cm)")
+    flags = [f.strip() for f in found.formatting.split(",") if f.strip()]
+    for wanted, word in ((change.bold, "fett"), (change.italic, "kursiv"),
+                         (None if change.visible is None else not change.visible, "unsichtbar")):
+        if wanted is not None:
+            v.add(f"„{change.name}“: {word}" + ("" if wanted else " – nein"), (word in flags) == wanted,
+                  found.formatting or "Standard")
+    colors = ((change.back_color, "Hintergrund", "#FFFFFF"), (change.fore_color, "Schrift", "#000000"))
+    for color, prefix, default in colors:
+        if not color or (prefix == "Hintergrund" and (change.transparent
+                                                    or found.control_type not in (c.AC_TEXT_BOX, c.AC_LABEL,
+                                                                                  c.AC_COMBO_BOX))):
+            continue  # Hintergrund liest inspect nur bei Text-/Bezeichnungs-/Kombinationsfeldern
+        if color.upper() == default:  # Standardfarbe erscheint nicht in der Formatierung – keine andere darf dastehen
+            ok = not any(f.startswith(prefix + " #") for f in flags)
+        else:
+            ok = f"{prefix} {color.upper()}" in flags
+        v.add(f"„{change.name}“: {prefix} {color.upper()}", ok, found.formatting or "Standard")

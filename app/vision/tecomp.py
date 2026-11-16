@@ -10,12 +10,16 @@ from __future__ import annotations
 
 import html
 import re
+import threading
+import time
 from pathlib import Path
 
 from app.vision.capture import TECOMP_PROCESS, visible_windows
 
 # Kapitel immer 4-stellig, Übung 1- oder 2-stellig (Kapitel 0403 hat U1…U11)
 EXERCISE_FILE = re.compile(r"(?<![\w-])(\d{4})(\d{1,2})_\d+\.(?:accdb|mdb)\b", re.IGNORECASE)
+#: Übung zu einer Bildschirminfo: „0501S2_…accdb“ = Kapitel 0501, Bildschirminfo SI-02 (screeninfo\SI-02a.htm)
+SCREENINFO_FILE = re.compile(r"(?<![\w-])(\d{4})S(\d{1,2})_\d+\.(?:accdb|mdb)\b", re.IGNORECASE)
 DEFAULT_INSTALL = Path(r"C:\Program Files (x86)\te.comp\te.comp-training")
 _NAVIGATION = {"Überblick", "Zu Access"}  # Navigationsbeschriftungen der Aufgabenseite
 
@@ -27,6 +31,26 @@ def install_dir() -> Path | None:
         if (proc.info["name"] or "").lower() == TECOMP_PROCESS and proc.info["exe"]:
             return Path(proc.info["exe"]).parent
     return DEFAULT_INSTALL if DEFAULT_INSTALL.exists() else None
+
+
+def read_page(page: Path) -> str:
+    """te.comp-Seiten sind teils UTF-8, teils Windows-1252 (Bildschirminfos) – Umlaute bleiben so erhalten."""
+    raw = page.read_bytes()
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return raw.decode("cp1252", errors="replace")
+
+
+def screeninfo_page(db_name: str, base: Path | None = None) -> Path | None:
+    """Bildschirminfo zu einer SI-Übungsdatei (oder ``None``) – erklärt, WO und WIE die Aufgabe gemeint ist."""
+    match = SCREENINFO_FILE.search(db_name)
+    base = base or (install_dir() if match else None)
+    if match is None or base is None:
+        return None
+    folder = base / "access" / "cbt" / match.group(1) / "screeninfo"
+    number = int(match.group(2))
+    return next((p for p in (folder / f"SI-{number:02d}a.htm", folder / f"SI-{number:02d}.htm") if p.exists()), None)
 
 
 def task_page(db_name: str, base: Path | None = None) -> Path | None:
@@ -117,7 +141,7 @@ def task_images(page: Path, limit: int = 3) -> list[bytes]:
 
     from PIL import Image
 
-    raw = page.read_text(encoding="utf-8", errors="replace")
+    raw = read_page(page)
     root = page.parent.resolve()
     result: list[bytes] = []
     seen: set[Path] = set()
@@ -141,6 +165,28 @@ def task_images(page: Path, limit: int = 3) -> list[bytes]:
     return result
 
 
+#: Ergebnis der Erreichbarkeitsprüfung je Ordner: (Zeitpunkt, erreichbar)
+_REACHABLE: dict[str, tuple[float, bool]] = {}
+REACHABLE_TIMEOUT_S = 1.5
+REACHABLE_CACHE_S = 60.0
+
+
+def reachable(folder: Path) -> bool:
+    """``is_dir`` mit Zeitlimit und kurzem Cache: ein getrenntes oder langsames Netzlaufwerk (z. B. W:) blockiert
+    Windows sonst bis zu einer Minute. Nicht rechtzeitig geantwortet = nicht erreichbar."""
+    key, now = str(folder).lower(), time.monotonic()
+    cached = _REACHABLE.get(key)
+    if cached is not None and now - cached[0] < REACHABLE_CACHE_S:
+        return cached[1]
+    answer: list[bool] = []
+    worker = threading.Thread(target=lambda: answer.append(folder.is_dir()), daemon=True)
+    worker.start()
+    worker.join(REACHABLE_TIMEOUT_S)
+    ok = bool(answer and answer[0])
+    _REACHABLE[key] = (now, ok)
+    return ok
+
+
 def workdirs() -> list[Path]:
     """Arbeitsordner von te.comp (Quelldateien von Workshops, z. B. ``…\\workdirs\\<Datum>\\access\\<Nr>\\WS01``)
     – neuester Tag zuerst – und das te.comp-Arbeitslaufwerk W:, falls verbunden."""
@@ -151,7 +197,7 @@ def workdirs() -> list[Path]:
             dirs += sorted((d for d in day.glob("access/*/*") if d.is_dir() and not d.name.endswith(".backups")),
                            key=lambda d: d.stat().st_mtime, reverse=True)
     work_drive = Path("W:\\")
-    if work_drive.is_dir():
+    if reachable(work_drive):
         dirs.append(work_drive)
     return dirs
 

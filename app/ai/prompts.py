@@ -24,7 +24,7 @@ Tabellen und Felder
   sollen, in Reihenfolge], hidden?[], unhide?[], widths_cm?{Spalte: cm}, best_fit?[Spalten – „optimale Breite“],
   frozen?[Spalten fixieren – stehen danach ganz vorne], unfreeze?(bool), formats?{Spalte: Access-Format, z. B.
   "ddd\\", \\"dd.mm\\"." | "hh:nn" | "0\\" Personen\\"" | "#,##0.00" | "Prozent"}, captions?{Spalte: Beschriftung},
-  alternate_back_color?("#RRGGBB")} – Datenblattansicht wie per Maus (Spalten verschieben/ausblenden/fixieren/
+  alternate_back_color?("#RRGGBB")} – nur TABELLEN-/ABFRAGE-Datenblätter – Datenblattansicht wie per Maus (Spalten verschieben/ausblenden/fixieren/
   verbreitern, Format von Abfragefeldern, andere Zeilenfarbe)
 
 FELD = {name, type(TYP), size?(nur short_text, 1–255), required?, default_value?, validation_rule?,
@@ -45,7 +45,11 @@ Daten
   has_header(bool, erste Zeile = Feldnamen), delimiter?(";" | "\\t" | ","; Standard automatisch),
   column_widths?[Zeichen je Spalte, nur bei fester Breite], sheet?(Excel-Blatt), fields?[FELD in Spaltenreihenfolge;
   bei vorhandener Tabelle nur name], primary_key?[vorhandenes Feld], add_id?(Name eines neuen AutoWert-Schlüssels)
-  (liest die Datei aus dem te.comp-Übungsordner und fügt die Daten ein – siehe QUELLDATEIEN im Kontext)
+  (liest die Datei aus dem te.comp-Übungsordner und fügt die Daten ein – siehe QUELLDATEIEN im Kontext; .xls, .xlsx,
+  .csv, .txt). Neue Tabelle aus einer Datei mit passenden Datentypen/Feldbeschreibungen: EIN import_data-Schritt mit
+  fields für ALLE Spalten (name = Spaltenüberschrift, type passend zu den Werten der Vorschau – Freitext wie Anmerkung,
+  Bemerkung, Notizen, Beschreibung = long_text –, description wie verlangt)
+  statt create_table + Import; existiert die Tabelle schon, zuerst change_field_type/set_field_properties je Feld, dann import_data.
 - export_data: source(Tabelle/Abfrage), file(nur Dateiname, .xlsx | .csv | .txt), delimiter?(";" Standard), header?(bool),
   excel_no_wrap?(nur .xlsx: „Textumbruch der Daten ausschalten“), excel_autofit?(nur .xlsx: „Spaltenbreiten optimal
   anpassen“) (Datei entsteht im Ordner der Datenbank; „über Kopieren und Einfügen“ = derselbe Export)
@@ -133,7 +137,10 @@ Formulare und Berichte
   border_width?(0–6), border_color?, transparent?(Hintergrund transparent), enabled?(false = nicht anklickbar),
   locked?, control_source?(Datenbindung/„Steuerelementinhalt“: Feldname oder "=Ausdruck")}], delete_controls?[Steuer-
   elementnamen], page_setup?(SEITE wie bei create_report), record_source?(neue Datenquelle: Tabelle, Abfrage oder
-  SELECT), width_cm?(Berichtsbreite, z. B. schmäler für mehrere Spalten – Steuerelemente vorher einpassen)} –
+  SELECT), width_cm?(Berichtsbreite, z. B. schmäler für mehrere Spalten – Steuerelemente vorher einpassen),
+  section_colors?[{section("detail"|"report_header"|"page_header"|"group_header"|"group_footer"|"page_footer"|
+  "report_footer"), group?(Gruppenebene, 0 = erste), back_color?("#RRGGBB" = Hintergrundfarbe des Bereichs),
+  alternate_back_color?("#RRGGBB" = Alternative Hintergrundfarbe: jede zweite Zeile/jeder zweite Datensatz)}]} –
   „Bearbeiten Sie den
   Bericht …“: NIE neu anlegen, sondern so ändern. control_changes wirken nach controls: ein neues Steuerelement mit
   name kann im selben Schritt formatiert werden
@@ -157,7 +164,12 @@ Formulare und Berichte
   control_changes?[wie bei modify_report], delete_controls?[], tab_control?{pages[{caption, fields?[Feldnamen],
   subform?(vorhandenes Formular), link_master_fields?, link_child_fields?}], move_fields?(true: Felder wandern auf die
   Seite, die bisherigen Steuerelemente werden entfernt)}, record_source?(neue Datenquelle: Tabelle, Abfrage oder
-  SELECT)} – vorhandenes Formular ändern statt neu anlegen.
+  SELECT), section_colors?[wie bei modify_report, section nur "detail"|"report_header"|"report_footer"]} – vorhandenes
+  Formular ändern statt neu anlegen.
+  „Jede zweite Zeile farbig/abwechselnde Zeilenfarbe“: im Bericht bzw. Formular (Layoutansicht, „Alternative
+  Zeilenfarbe“) = section_colors mit section "detail" und alternate_back_color; nur bei einer TABELLE/ABFRAGE in der
+  Datenblattansicht = set_datasheet_layout.alternate_back_color. Nennt die Aufgabe kein Objekt, entscheide nach
+  Lernkapitel/Bildschirminfo (z. B. „Layoutansicht“ = Bericht/Formular) und den vorhandenen Objekten.
   Soll oben im Formular (Titel/Kopf) der Name der Person erscheinen: Textfeld im Formularkopf
   (section "report_header", expression "=[Vorname] & \" \" & [Nachname]", name) und per control_changes transparent,
   border_style 0, passende fore_color, enabled false, locked true – KEIN VBA
@@ -234,6 +246,9 @@ REGELN
 11. Bearbeite ALLE Teilaufgaben, nicht nur die erste. Jede Anforderung (1-basiert nummeriert in der Reihenfolge
     von "requirements") muss in "covers" mindestens eines Schritts stehen – oder in "manual_requirements", wenn sie
     keine Datenbankänderung braucht (z. B. reine Ansichts- oder Bedienhinweise). Das Programm prüft das.
+    Hinweise der Lernplattform, die keine Arbeit in Access sind („Lesen Sie die Ausgangssituation“, „Informieren
+    Sie sich über …“, „Klicken Sie auf Prüfen/Weiter“, Navigationsbeschriftungen), sind KEINE Anforderungen – nimm
+    sie gar nicht in "requirements" auf; die Anforderungen sind nur das, was in der Datenbank zu tun ist.
 12. "Sortieren Sie die Tabelle … in der Datenblattansicht" bedeutet set_table_sort_filter mit order_by, z. B.
     "[Land], [Golfplatz]". Sollen Felder in einer Abfrage vorne angezeigt, aber nach anderen Feldern sortiert werden,
     setze die Sortierfelder mit "show": false an den Anfang von "fields" und danach die angezeigten Felder.

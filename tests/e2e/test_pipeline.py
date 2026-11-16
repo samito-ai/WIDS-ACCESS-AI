@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 from app.agent.orchestrator import AutoInteraction, PipelineEvent
+from app.ai import prompts
 from app.core.errors import ProviderAuthError, ResponseFormatError, WidsError
 from app.tasks.models import CapturedTask
 from tests.helpers import Harness, build_harness, solution
@@ -84,10 +85,9 @@ def test_full_workflow_query(make: Any) -> None:
     _, rows = h.access.run(lambda e: e.queries.run_select("qryKundenTirol"))
     assert [r[0] for r in rows] == ["Auer", "Egger", "Gruber", "Hofer", "Mayr", "Pichler"]
 
-    # Freigabe, Sicherung, Verlauf
-    request = interaction.requests[0]
-    assert request.db_name == "uebung.accdb"
-    assert Path(outcome.backup_path).exists()
+    # keine Freigabe-Rückfrage (vom Benutzer gestartet), Sicherung, Verlauf
+    assert interaction.requests == []
+    assert Path(outcome.backup_path).exists() and "uebung" in Path(outcome.backup_path).name
     record = h.storage.get_task(prepared.task_id)
     assert record.status == "erfolgreich" and record.task_type == "select_query"
     assert "qryKundenTirol" in record.report_md and "✅ Schritt 1" in record.report_md
@@ -163,7 +163,8 @@ def test_grouped_report_task(make: Any) -> None:
     assert outcome.status == "erfolgreich", outcome.error
     assert [v.passed for v in outcome.verifications] == [True, True]
     names = {c.name for c in outcome.verifications[0].checks}
-    assert {"Bericht vorhanden", "Datensatzquelle", "Gruppierung", "Berechnung sum(Umsatz)"} <= names
+    assert {"Bericht vorhanden", "Datensatzquelle", "Gruppierung", "Gruppenberechnung sum(Umsatz)",
+            "Gesamtberechnung sum(Umsatz) im Berichtsfuß"} <= names
     schema = h.access.schema(refresh=True)
     assert [r.name for r in schema.reports] == ["rptUmsatz"] and [f.name for f in schema.forms] == ["frmKunden"]
 
@@ -186,6 +187,9 @@ def test_import_task_from_text_file(make: Any) -> None:
     assert rows == [["Adams", False], ["Andrews", True]]
     assert h.access.run(lambda e: e.tables.primary_key("Filmcrew")) == ["FilmSetID"]
     assert outcome.changes and "Filmcrew" in outcome.changes[0]
+    # Praxistest: „Feldnamen aus der Datei übernehmen“ ist nur mit den Spaltenüberschriften prüfbar
+    check = next(r for r in h.provider.requests if r.system == prompts.REQUIREMENTS_SYSTEM).messages[0].content
+    assert "QUELLDATEIEN" in check and "WalkOfFame" in check
 
 
 @pytest.mark.access_app
@@ -244,30 +248,30 @@ def test_conflict_policy_from_settings_without_prompt(make: Any) -> None:
     assert outcome.status == "erfolgreich" and interaction.conflicts == []
 
 
+def test_overwrite_policy_never_replaces_in_background(make: Any) -> None:
+    """Codex-Befund nach Entfernen der Freigabe: „überschreiben“ aus den Einstellungen darf im Hintergrund (Alt+W ohne
+    Dashboard) nichts Vorhandenes ersetzen – Ersetzen löscht und braucht eine Bestätigung."""
+    h = make([solution([QUERY_TIROL])], automation__conflict_policy="overwrite")
+    h.access.run(lambda e: e.queries.create_query("qryKundenTirol", "SELECT Ort FROM Kunden"))
+    _, outcome, _ = run(h, TASK_TIROL, AutoInteraction(interactive=False))
+    assert outcome.status != "erfolgreich"
+    assert "Ort" in h.access.run(lambda e: e.queries.get_sql("qryKundenTirol")), "vorhandene Abfrage unverändert"
+
+
 # --------------------------------------------------------------------------- Freigabe und Sicherheit
-def test_trusted_practice_database_skips_repeated_approval(make: Any) -> None:
-    from app.agent.orchestrator import ApprovalDecision, trust_key
-
-    query = {"action": "create_query", "name": "qryVertraut", "sql": "SELECT Nachname FROM Kunden"}
+def test_user_started_plan_runs_without_approval_but_destructive_asks(make: Any) -> None:
+    """Kein Freigabesystem mehr: ein vom Benutzer gestarteter, nicht löschender Plan läuft ohne Rückfrage (mit
+    Sicherung). Löschende Pläne brauchen weiterhin die ausdrückliche Bestätigung."""
+    query = {"action": "create_query", "name": "qryDirekt", "sql": "SELECT Nachname FROM Kunden"}
     h = make([solution([query])])
-
-    class Trusting(AutoInteraction):
-        def approve_plan(self, request: Any) -> ApprovalDecision:
-            self.requests.append(request)
-            return ApprovalDecision(approved=True, practice_confirmed=True, trust=True)
-
-    first = Trusting()
-    _, outcome, _ = run(h, "Erstellen Sie qryVertraut.", first)
-    assert outcome.status == "erfolgreich" and len(first.requests) == 1
-    assert h.storage.load_settings().security.trusted_databases == [trust_key(h.access.path)]
-    h.provider.responses.append(solution([{**query, "name": "qryVertraut2"}]))
-    second = AutoInteraction(approve=False)  # würde ablehnen – darf gar nicht gefragt werden
-    _, outcome, _ = run(h, "Erstellen Sie qryVertraut2.", second)
-    assert outcome.status == "erfolgreich" and second.requests == [] and Path(outcome.backup_path).exists()
-    h.provider.responses.append(solution([{"action": "delete_query", "name": "qryVertraut2"}]))
+    never = AutoInteraction(approve=False)  # würde ablehnen – darf gar nicht gefragt werden
+    _, outcome, _ = run(h, "Erstellen Sie qryDirekt.", never)
+    assert outcome.status == "erfolgreich" and never.requests == [] and Path(outcome.backup_path).exists()
+    h.provider.responses.append(solution([{"action": "delete_query", "name": "qryDirekt"}]))
     third = AutoInteraction(approve=False)
-    _, outcome, _ = run(h, "Löschen Sie qryVertraut2.", third)
+    _, outcome, _ = run(h, "Löschen Sie qryDirekt.", third)
     assert len(third.requests) == 1 and outcome.status == "abgelehnt", "löschende Pläne brauchen weiter die Freigabe"
+    assert h.access.run(lambda e: e.queries.exists("qryDirekt"))
 
 
 def test_same_plan_is_never_executed_twice(make: Any) -> None:
@@ -282,21 +286,22 @@ def test_same_plan_is_never_executed_twice(make: Any) -> None:
 
 
 def test_rejected_plan_changes_nothing(make: Any) -> None:
-    h = make([solution([QUERY_TIROL])])
-    _, outcome, _ = run(h, TASK_TIROL, AutoInteraction(approve=False))
-    assert outcome.status == "abgelehnt" and outcome.backup_path == ""
-    assert h.access.run(lambda e: e.queries.exists("qryKundenTirol")) is False
+    """Ein löschender Plan wird im Dashboard nachgefragt – abgelehnt ändert er nichts (auch keine Sicherung)."""
+    delete = solution([{"action": {"action": "delete_records", "table": "Bestellungen", "where": "Menge > 0"}}],
+                      task_type="data_editing")
+    h = make([delete])
+    before = h.access.run(lambda e: e.tables.count_records("Bestellungen"))
+    _, outcome, interaction = run(h, "Löschen Sie die Bestellungen.", AutoInteraction(approve=False))
+    assert outcome.status == "abgelehnt" and outcome.backup_path == "" and len(interaction.requests) == 1
+    assert h.access.run(lambda e: e.tables.count_records("Bestellungen")) == before
     assert h.backups.list_backups() == []
 
 
 def test_missing_practice_confirmation_blocks(make: Any) -> None:
-    h = make([solution([QUERY_TIROL]), solution([QUERY_TIROL])])
+    """Löschender Plan im Dashboard: ohne Übungs-Bestätigung wird nichts geändert; nichts wird gemerkt."""
+    h = make([solution([QUERY_TIROL])])
     _, outcome, _ = run(h, TASK_TIROL, AutoInteraction(practice_confirmed=False))
-    assert outcome.status == "blockiert"
-    assert h.access.run(lambda e: e.queries.exists("qryKundenTirol")) is False
-    _, outcome, _ = run(h, TASK_TIROL, AutoInteraction(practice_confirmed=True))
-    assert outcome.status == "erfolgreich"
-    # Die Bestätigung wird nicht gemerkt: beim nächsten Plan für dieselbe Datei ist sie wieder nötig
+    assert outcome.status == "erfolgreich", "nicht löschender Plan: keine Rückfrage nötig"
     h.provider.responses.append(solution([{"action": "delete_query", "name": "qryKundenTirol"}]))
     _, outcome, _ = run(h, "Löschen Sie die Abfrage", AutoInteraction(practice_confirmed=False, confirm_destructive=True))
     assert outcome.status == "blockiert"
@@ -1005,7 +1010,7 @@ def test_diagnosis_shows_requirements_steps_checks_and_corrections(make: Any) ->
     assert "## Korrekturschritte (Selbstkorrektur)" in report and "Schritt 2: qryOrte anlegen" in report
     diagnosis = report.split("## Diagnose (Anforderung → Schritte → Prüfung)", 1)[1]
     assert "Anforderungen erkannt: 3" in diagnosis and "Korrekturschritte: 1" in diagnosis
-    assert "| 3 | Abfrage qryOrte | 1 ✅, 2 ✅ | 1: 6/6 ✓, 2: 3/3 ✓ | erfüllt" in diagnosis, diagnosis
+    assert "| 3 | Abfrage qryOrte | 1 ✅, 2 ✅ | 1: 7/7 ✓, 2: 4/4 ✓ | erfüllt" in diagnosis, diagnosis  # inkl. Ergebnisvergleich
     assert "Zyklus 1: qryOrte anlegen: ausgeführt → danach noch offen: keine" in diagnosis
     assert outcome.corrections and h.storage.get_task(outcome.task_id).report_md == report
 
@@ -1068,81 +1073,31 @@ def test_history_failure_does_not_mask_the_original_error(make: Any, monkeypatch
         h.pipeline.execute(prepared, AutoInteraction())
 
 
-# --------------------------------------------------------------------------- 24-h-Lernprogrammfreigabe, Ruhemodus
-def _programs() -> tuple[Any, Any]:
-    from app.security.programs import Program
-
-    return Program("Kap.02", "DA - Tabellen", ("02*",)), Program("Kap.04", "DA - Formulare", ("03*",))
-
-
-def test_program_approval_covers_switching_exercises_in_background(make: Any, sample_db_path: Path, tmp_path: Path) -> None:
-    """Einmal freigegeben: zwei Übungsdateien desselben Lernprogramms nacheinander im Hintergrund, ohne jede
-    Rückfrage. Ein anderes Lernprogramm ist davon nicht erfasst."""
+# --------------------------------------------------------------------------- Hintergrund: Alt+W ohne Freigabe
+def test_switching_exercises_in_background_needs_no_approval(make: Any, sample_db_path: Path, tmp_path: Path) -> None:
+    """Mehrere Übungsdateien beliebigen Namens nacheinander im Hintergrund – ohne jede Rückfrage, Sicherung bleibt."""
     import shutil
 
-    from app.security import programs
-
-    tables, forms = _programs()
-    second, third = tmp_path / "zweite.accdb", tmp_path / "dritte.accdb"
+    second = tmp_path / "Zweite Übung – Kopie.accdb"
     shutil.copy(sample_db_path, second)
-    shutil.copy(sample_db_path, third)
     h = make([solution([QUERY_TIROL]),
               solution([{"action": "create_query", "name": "qryOrte", "sql": "SELECT Ort FROM Kunden"}])])
-    lookup = {sample_db_path.name.lower(): tables, "zweite.accdb": tables, "dritte.accdb": forms}
-    h.pipeline._program_lookup = lambda p: lookup.get(Path(p).name.lower()) if p else None
-    programs.approve(h.settings.security.program_approvals, tables)
     background = AutoInteraction(interactive=False)
-
     _, first, _ = run(h, TASK_TIROL, background)
     assert first.status == "erfolgreich", first.error
     h.access.connect(str(second), prefer_running=False)
     _, other, _ = run(h, "Erstellen Sie die Abfrage qryOrte mit allen Orten.", background)
     assert other.status == "erfolgreich", other.error
     assert background.requests == [] and background.confirmations == [], "keine Routinebestätigung"
-    assert sum("Lernprogramm „DA - Tabellen“ freigegeben bis" in e.message for e in background.events) == 2
     assert first.backup_path and other.backup_path, "Sicherung bleibt Pflicht"
-    assert h.pipeline.approval_source(str(third)) == (False, "")
-    assert "„DA - Formulare“ fehlt" in h.pipeline.missing_approval_hint(str(third))
 
 
-def test_expired_program_approval_stops_in_background_until_renewed(make: Any) -> None:
-    """Nach 24 Stunden: angehalten (blockiert, im Verlauf mit Ursache), keine Sicherung, nichts geändert, kein Dialog.
-    Nach erneuter Freigabe läuft dieselbe Aufgabe wieder ohne Rückfrage."""
-    from datetime import UTC, datetime, timedelta
-
-    from app.security import programs
-
-    tables, _ = _programs()
-    h = make([solution([QUERY_TIROL]), solution([QUERY_TIROL])])
-    h.pipeline._program_lookup = lambda p: tables
-    programs.approve(h.settings.security.program_approvals, tables,
-                     now=datetime.now(tz=UTC) - timedelta(hours=24, minutes=1))
-    background = AutoInteraction(interactive=False)
-    _, outcome, _ = run(h, TASK_TIROL, background)
-    assert outcome.status == "blockiert" and "abgelaufen" in outcome.error, outcome.error
-    assert background.requests == [] and not outcome.backup_path
-    assert not h.access.run(lambda e: e.queries.exists("qryKundenTirol"))
-    record = h.storage.get_task(outcome.task_id)
-    assert record.status == "blockiert" and "abgelaufen" in record.error and "abgelaufen" in record.report_md
-    programs.approve(h.settings.security.program_approvals, tables)
-    _, renewed, _ = run(h, TASK_TIROL, background)
-    assert renewed.status == "erfolgreich" and background.requests == []
-
-
-def test_background_never_asks_and_never_bypasses_a_safety_decision(make: Any) -> None:
-    """Ohne Dashboard: fremde Datei ohne Lernprogramm → angehalten; löschender Plan trotz Freigabe → angehalten.
-    Es erscheint keine Rückfrage, und nichts wird automatisch bejaht."""
-    from app.security import programs
-
-    tables, _ = _programs()
+def test_background_never_asks_and_never_bypasses_a_destructive_step(make: Any) -> None:
+    """Ohne Dashboard: löschender Plan → angehalten. Keine Rückfrage, nichts wird automatisch bejaht."""
     delete = solution([{"action": {"action": "delete_records", "table": "Bestellungen", "where": "Menge > 0"}}],
                       task_type="data_editing")
-    h = make([solution([QUERY_TIROL]), delete])
+    h = make([delete])
     background = AutoInteraction(interactive=False, confirm_destructive=True)
-    _, outcome, _ = run(h, TASK_TIROL, background)
-    assert outcome.status == "blockiert" and "keinem eindeutig erkannten te.comp-Lernprogramm" in outcome.error
-    h.pipeline._program_lookup = lambda p: tables
-    programs.approve(h.settings.security.program_approvals, tables)
     before = h.access.run(lambda e: e.tables.count_records("Bestellungen"))
     _, outcome, _ = run(h, "Löschen Sie alle Bestellungen mit einer Menge.", background)
     assert outcome.status == "blockiert" and "löschende Schritte" in outcome.error, outcome.error
@@ -1150,14 +1105,9 @@ def test_background_never_asks_and_never_bypasses_a_safety_decision(make: Any) -
     assert h.access.run(lambda e: e.tables.count_records("Bestellungen")) == before
 
 
-def test_exam_environment_blocks_even_with_program_approval(make: Any) -> None:
-    """Prüfungsschutz unverändert vor jeder Freigabe: Next Exam sperrt; das Wort „Schularbeit“ im Fenstertitel nicht."""
-    from app.security import programs
-
-    tables, _ = _programs()
+def test_exam_environment_blocks_alt_w(make: Any) -> None:
+    """Prüfungsschutz unverändert: Next Exam sperrt; das Wort „Schularbeit“ im Fenstertitel nicht."""
     h = make([solution([QUERY_TIROL]), solution([QUERY_TIROL])])
-    h.pipeline._program_lookup = lambda p: tables
-    programs.approve(h.settings.security.program_approvals, tables)
     h.environment["processes"] = ["Next-Exam-Student.exe"]
     _, outcome, _ = run(h, TASK_TIROL, AutoInteraction(interactive=False))
     assert outcome.status == "blockiert" and "Prüfung" in outcome.error and not outcome.backup_path

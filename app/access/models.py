@@ -117,6 +117,8 @@ class QueryInfo(BaseModel):
     description: str = ""
     #: Datenblatteinstellungen inkl. Formate/Beschriftungen der Abfragefelder
     datasheet: str = ""
+    #: nicht leer = Access kann die Abfrage nicht ausführen (z. B. Eingabetabelle fehlt) – keine brauchbare Datenquelle
+    error: str = ""
 
 
 class ControlInfo(BaseModel):
@@ -136,6 +138,8 @@ class ControlInfo(BaseModel):
     link_master_fields: str = ""
     link_child_fields: str = ""
     navigation_target: str = ""
+    #: Zieltyp der Navigationsschaltfläche: "form" | "report" | "" (keine)
+    navigation_kind: str = ""
     #: Regeln der bedingten Formatierung (Kurzbeschreibung)
     conditions: list[str] = Field(default_factory=list)
     #: sichtbare Formatierung („fett“, „Hintergrund #FFFF00“ …), leer = Standard
@@ -199,6 +203,8 @@ class FormInfo(BaseModel):
     controls: list[ControlInfo] = Field(default_factory=list)
     properties: dict[str, Any] = Field(default_factory=dict)
     detailed: bool = False
+    #: Bereichsnummer → (Hintergrund, alternativer Hintergrund), z. B. {0: ("#FFFFFF", "#F2F2F2")}
+    section_colors: dict[int, tuple[str, str]] = Field(default_factory=dict)
 
 
 class ReportInfo(BaseModel):
@@ -209,6 +215,8 @@ class ReportInfo(BaseModel):
     group_levels: list[GroupLevelInfo] = Field(default_factory=list)
     properties: dict[str, Any] = Field(default_factory=dict)
     detailed: bool = False
+    #: Bereichsnummer → (Hintergrund, alternativer Hintergrund), z. B. {0: ("#FFFFFF", "#F2F2F2")}
+    section_colors: dict[int, tuple[str, str]] = Field(default_factory=dict)
 
 
 class DatabaseSchema(BaseModel):
@@ -290,6 +298,9 @@ class DatabaseSchema(BaseModel):
             sql = " ".join(query.sql.split())
             shown = sql if len(sql) <= 2000 else sql[:2000] + " … (gekürzt)"
             lines.append(f"  - {query.name} [{query.type_name}]: {shown}")
+            if query.error:
+                lines.append(f"      ⚠ NICHT AUSFÜHRBAR ({query.error}) – nicht als Datenquelle verwenden, außer sie wird "
+                             "zuerst repariert (create_query mit modify_existing)")
             if query.datasheet:
                 lines.append(f"      (Datenblatt: {query.datasheet})")
         for title, items in (("FORMULARE", self.forms), ("BERICHTE", self.reports)):
@@ -318,6 +329,8 @@ class DatabaseSchema(BaseModel):
                     if item.default_view == 5 and fprops.get("SplitFormSplitterBar") is False:
                         notable.append("Trennleiste aus")
                     notable += [f"{k} {fprops[k]}" for k in ("Filter", "OrderBy") if fprops.get(k)]
+                    if fprops.get("Bereichsfarben"):
+                        notable.append(f"Bereichsfarben: {fprops['Bereichsfarben']}")
                     if notable:
                         extra.append("Formulareigenschaften: " + ", ".join(notable))
                 for ctl in item.controls:

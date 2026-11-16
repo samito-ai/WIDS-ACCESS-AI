@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from app.access.engine import AccessEngine
 from app.access.models import DatabaseSchema
+from app.access.naming import quote_ident
 from app.access.sqlbuilder import build_sql, classify_sql, ensure_single_statement
 from app.core.errors import ObjectNotFoundError
 from app.core.logging_setup import get_logger
@@ -45,6 +46,10 @@ class ExecOptions(BaseModel):
     max_affected: int | None = None
     #: Korrigiertes SQL (Recovery) statt des geplanten
     sql_override: str | None = None
+
+
+#: so viele Schlüssel geänderter Datensätze merkt sich WIDS für die Prüfung (darüber: Prüfung über die Bedingung)
+_MAX_TRACKED_KEYS = 2000
 
 
 class AccessExecutor:
@@ -161,11 +166,20 @@ class AccessExecutor:
         where = "in die neue Tabelle" if created else "in die vorhandene Tabelle"
         return StepResult(step_id=0, message=f"{inserted} Datensätze aus „{source.name}“ {where} „{table}“ importiert",
                           final_name=table, details={"count_before": before, "inserted": inserted, "created": created,
-                                                       "source": str(source)})
+                                                       "source": str(source),
+                                                       "source_rows": len(rows) - (1 if a.has_header and rows else 0)})
 
     def _do_update_records(self, e: AccessEngine, a: m.UpdateRecords, o: ExecOptions) -> StepResult:
+        details: dict[str, Any] = {}
+        key = e.tables.primary_key(a.table)
+        if len(key) == 1 and key[0].lower() not in {k.lower() for k in a.values}:  # genau DIESE Datensätze merken
+            sql = f"SELECT {quote_ident(key[0])} FROM {quote_ident(a.table)}" + (f" WHERE {a.where}" if a.where else "")
+            _, rows = e.tables.read_sql(sql, limit=_MAX_TRACKED_KEYS + 1)
+            if len(rows) <= _MAX_TRACKED_KEYS:
+                details |= {"key_field": key[0], "target_keys": [row[0] for row in rows]}
         affected = e.tables.update_records(a.table, a.values, a.where, max_affected=o.max_affected)
-        return StepResult(step_id=0, message=f"{affected} Datensätze in „{a.table}“ geändert", details={"affected": affected})
+        return StepResult(step_id=0, message=f"{affected} Datensätze in „{a.table}“ geändert",
+                          details={"affected": affected, **details})
 
     def _do_delete_records(self, e: AccessEngine, a: m.DeleteRecords, o: ExecOptions) -> StepResult:
         before = e.tables.count_records(a.table)

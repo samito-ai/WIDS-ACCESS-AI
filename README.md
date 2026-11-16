@@ -1,6 +1,6 @@
 # WIDS ACCESS AI
 
-**Version 1.0.0 Beta 1** · Windows · Microsoft Access · Anthropic Claude · kostenlos, Open Source ([MIT](LICENSE))
+**Version 1.0.0 Beta 2** · Windows · Microsoft Access · Anthropic Claude · kostenlos, Open Source ([MIT](LICENSE))
 
 > KI-Assistent für Microsoft-Access-**Übungen**: Aufgabe erkennen → Lösung planen → Sicherung → in Access ausführen →
 > jede Anforderung unabhängig prüfen → Diagnosebericht. Funktioniert mit jeder Access-Datei, egal wie sie heißt.
@@ -27,6 +27,9 @@
   in eine begrenzte Selbstkorrektur (höchstens 3 Runden, bei Stillstand ein anderer Lösungsweg)
 - **Hintergrundbetrieb:** Übung öffnen, **Alt+W** drücken – ohne Fenster, ohne Pop-ups, ohne Fokuswechsel.
   Ein 2 × 2-Pixel-Punkt oben links zeigt den Zustand (gelb = arbeitet, grün = bestätigt, rot = Fehler/angehalten)
+- **Keine Freigaben mehr nötig:** Alt+W ist die bewusste Aktion des Benutzers – kein Freigeben von
+  Lernprogrammen, Workshops oder Dateien, keine Ablaufzeiten. Prüfungsschutz, Sicherung vor jeder Änderung und
+  die Bestätigung löschender Schritte bleiben
 - **Unabhängig vom Dateinamen:** „Datenbank1.accdb“, „CD-Sammlung“ oder nummerierte Übungsdateien, auch auf
   Netzlaufwerken
 
@@ -45,9 +48,10 @@ Voraussetzungen: Windows 10/11, Microsoft Access (Desktop), ein eigener Anthropi
 
 1. **Einstellungen** öffnen, den Anthropic-Schlüssel einfügen und **Verbindung testen** klicken.
    Anleitung: [API-Schlüssel sicher einrichten](docs/INSTALLATION.md#anthropic-api-schlüssel-sicher-einrichten).
-2. Im Dashboard die Übungsdatenbank bzw. das Lernprogramm freigeben (Freigaben gelten 24 Stunden).
-3. Die Übung in Access öffnen und **Alt+W** drücken.
-4. Ergebnis und Diagnosebericht im Dashboard ansehen.
+2. Die Übung in Access öffnen und **Alt+W** drücken – keine weitere Freigabe nötig.
+3. Ergebnis und Diagnosebericht im Dashboard ansehen.
+
+Kurzanleitung für Kolleginnen und Kollegen: [SCHNELLSTART.md](docs/SCHNELLSTART.md).
 
 Ausführlich: [Installation und Einrichtung](docs/INSTALLATION.md).
 

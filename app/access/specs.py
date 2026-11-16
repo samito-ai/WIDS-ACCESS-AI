@@ -648,6 +648,28 @@ class ControlChange(StrictModel):
     control_source: str | None = None
 
 
+class SectionColorSpec(StrictModel):
+    """Farben eines Bereichs (Access: Bereich → Hintergrundfarbe / Alternative Hintergrundfarbe). Die alternative
+    Farbe färbt jede zweite Zeile bzw. jeden zweiten Datensatz – „Format > Alternative Zeilenfarbe“ in der Layoutansicht
+    eines Berichts oder Endlosformulars. Für Tabellen-/Abfragedatenblätter gilt stattdessen set_datasheet_layout."""
+
+    section: ReportSection = "detail"
+    #: Gruppenebene (0 = erste) bei group_header/group_footer
+    group: int = Field(default=0, ge=0, le=9)
+    back_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+    alternate_back_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+
+    @model_validator(mode="after")
+    def _check(self) -> SectionColorSpec:
+        if not (self.back_color or self.alternate_back_color):
+            raise ValueError("Für den Bereich ist keine Farbe angegeben.")
+        if self.alternate_back_color and self.section in ("page_header", "page_footer"):
+            # Access: Seitenkopf/-fuß haben keine „Alternative Hintergrundfarbe“ (Laufzeitfehler 2455, gemessen)
+            raise ValueError("Seitenkopf und Seitenfuß haben keine alternative Hintergrundfarbe – jede zweite Zeile "
+                             "färbt der Detailbereich (section \"detail\").")
+        return self
+
+
 class ReportChangeSpec(StrictModel):
     """Änderungen an einem VORHANDENEN Bericht (te.comp: „Bearbeiten Sie den Bericht …“)."""
 
@@ -667,12 +689,14 @@ class ReportChangeSpec(StrictModel):
     record_source: str | None = None
     #: Berichtsbreite (z. B. für mehrspaltigen Druck schmäler); Steuerelemente vorher per control_changes einpassen
     width_cm: float | None = Field(default=None, gt=1, le=55)
+    #: Hintergrund-/alternative Hintergrundfarbe von Bereichen (z. B. jede zweite Detailzeile farbig)
+    section_colors: list[SectionColorSpec] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _check(self) -> ReportChangeSpec:
         if not (self.filter is not None or self.order_by is not None or self.hide_detail is not None or self.groups
                 or self.controls or self.control_changes or self.delete_controls or self.page_setup
-                or self.record_source or self.width_cm):
+                or self.record_source or self.width_cm or self.section_colors):
             raise ValueError("Keine Berichtsänderung angegeben.")
         return self
 
@@ -714,12 +738,17 @@ class FormChangeSpec(StrictModel):
     tab_control: TabControlSpec | None = None
     #: neue Datenquelle (Tabelle, Abfrage oder SELECT) – „Datensatzquelle“ des Formulars
     record_source: str | None = None
+    #: Hintergrund-/alternative Hintergrundfarbe von Bereichen (detail, report_header = Formularkopf, report_footer)
+    section_colors: list[SectionColorSpec] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _check(self) -> FormChangeSpec:
         if not (self.caption is not None or self.default_view or self.properties or self.controls
-                or self.control_changes or self.delete_controls or self.tab_control or self.record_source):
+                or self.control_changes or self.delete_controls or self.tab_control or self.record_source
+                or self.section_colors):
             raise ValueError("Keine Formularänderung angegeben.")
+        if any(s.section in ("group_header", "group_footer") for s in self.section_colors):
+            raise ValueError("Formulare haben keine Gruppenbereiche.")
         bad = [c.section for c in self.controls if c.section not in ("detail", "report_header", "report_footer")]
         if bad:
             raise ValueError(f"Formulare haben nur Detailbereich, Formularkopf und -fuß (nicht {bad[0]}).")

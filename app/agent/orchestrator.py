@@ -5,7 +5,6 @@ import json
 import threading
 import time
 from collections.abc import Callable
-from datetime import datetime
 from functools import partial
 from typing import Any, Literal, Protocol
 
@@ -32,7 +31,6 @@ from app.core.errors import (
 )
 from app.core.logging_setup import get_logger
 from app.core.settings import AppSettings
-from app.security import programs
 from app.security.backup import BackupManager, FileState, inspect_file
 from app.security.policy import SafetyPolicy
 from app.storage.database import Storage, now_iso
@@ -79,8 +77,6 @@ class ApprovalDecision(BaseModel):
     approved: bool = False
     #: Der Benutzer bestätigt, dass es sich um eine Übungsdatenbank (keine Prüfung) handelt
     practice_confirmed: bool = False
-    #: Diese Übungsdatenbank künftig als vertrauenswürdig merken (nicht löschende Pläne ohne erneute Freigabe)
-    trust: bool = False
 
 
 def _object_names(schema: DatabaseSchema) -> set[str]:
@@ -106,13 +102,6 @@ def _can_ask(interaction: Any) -> bool:
     """Darf jetzt ein Dialog erscheinen? Im Hintergrundbetrieb (Dashboard geschlossen) nicht."""
     can_ask = getattr(interaction, "can_ask", None)
     return bool(can_ask()) if callable(can_ask) else True
-
-
-def trust_key(db_path: str) -> str:
-    """Vergleichsschlüssel einer freigegebenen Datenbank (voller, normalisierter Pfad)."""
-    import os
-
-    return os.path.normcase(os.path.abspath(db_path)) if db_path else ""
 
 
 class Interaction(Protocol):
@@ -170,7 +159,6 @@ class TaskPipeline:
         policy: SafetyPolicy,
         environment_probe: Any = None,
         sleep: Any = time.sleep,
-        program_lookup: Any = None,
     ) -> None:
         self.settings = settings
         self._storage = storage
@@ -184,44 +172,41 @@ class TaskPipeline:
         #: liefert (Fenstertitel, Prozessnamen) für den Prüfungsschutz; in Tests austauschbar
         self._environment_probe = environment_probe
         self._sleep = sleep
-        #: Datei → te.comp-Lernprogramm (oder None); in Tests austauschbar
-        self._program_lookup = program_lookup or (
-            lambda path: programs.program_for(path, assignments=self.settings.security.program_assignments))
 
-    # ------------------------------------------------------------------ Freigaben
-    def approval_source(self, db_path: str) -> tuple[bool, str]:
-        """Ist diese Datei ohne Routinebestätigung freigegeben? (frei, Beschreibung für Verlauf/Bericht)"""
-        if trust_key(db_path) in {trust_key(p) for p in self.settings.security.trusted_databases}:
-            return True, "Gemerkte Übungsdatenbank"
-        program = self._program_lookup(db_path)
-        if program is not None:
-            approval = programs.active_approval(self.settings.security.program_approvals, program.id)
-            if approval is not None:
-                until = datetime.fromisoformat(approval.expires_at).astimezone().strftime("%d.%m. %H:%M")
-                return True, f"Lernprogramm „{program.caption}“ freigegeben bis {until}"
-        return False, ""
+    def _reverify_touched(self, steps: list[m.PlanStep], results: list[StepResult]) -> list[Verification]:
+        by_id = {r.step_id: r for r in results}
+        fresh: list[Verification] = []
+        for index, step in enumerate(steps):
+            result = by_id.get(step.id)
+            if isinstance(step.action, _DATA_ACTIONS) or result is None or result.status != "ok":
+                continue  # Datenschritte prüfen Anzahlen von damals – eine spätere Änderung verfälscht sie nicht
+            # Objekt = Teil vor dem Punkt („frmA.Umsatz“ → „frmA“; Access-Namen enthalten keinen Punkt)
+            target, kind = step.action.target().lower().split(".")[0], step.action.action
+            # nur wenn ein späterer Schritt das Objekt NEU ANLEGT – gewollte Änderungen (modify_*, Felder löschen)
+            # dürfen frühere Prüfungen nicht nachträglich zu Fehlern machen
+            if not any(later.action.target().lower().split(".")[0] == target and later.action.action != kind
+                       and later.action.action.startswith("create_") and "." not in later.action.target()
+                       for later in steps[index + 1:]):
+                continue
+            try:
+                fresh.append(self._access.run(partial(self._verifier.verify, step=step, result=result)))
+            except WidsError as exc:
+                log.warning("Neuprüfung von Schritt %s nicht möglich: %s", step.id, exc)
+        return fresh
 
-    def missing_approval_hint(self, db_path: str) -> str:
-        """Warum nichts geändert wurde und was der Benutzer tun kann (ohne Dialog, für Verlauf und Bericht)."""
-        program = self._program_lookup(db_path)
-        if program is None:
-            return ("Keine Freigabe: Die Datei gehört zu keinem eindeutig erkannten te.comp-Lernprogramm. Bitte im "
-                    "Dashboard die geöffnete Datenbank einmal einem Lernprogramm/Workshop zuordnen und freigeben – "
-                    "oder die Aufgabe im Dashboard starten und den Plan dort freigeben.")
-        expired = [a for a in self.settings.security.program_approvals if a.program_id == program.id]
-        state = "ist abgelaufen" if expired else "fehlt"
-        return (f"Die 24-Stunden-Freigabe für das Lernprogramm „{program.caption}“ {state}. Bitte im Dashboard "
-                "„Lernprogramm freigeben“ wählen und Alt+W erneut drücken.")
-
-    def record_blocked(self, task: m.CapturedTask, reason: str) -> int:
-        """Aufgabe, die ohne Freigabe nicht bearbeitet wird, im Verlauf festhalten (ohne KI-Anfrage, ohne Änderung)."""
-        task_id = self._storage.create_task(raw_text=task.text, source=task.source or task.window_title,
-                                            capture_method=task.method, db_path=task.db_path)
-        self._storage.add_task_event(task_id, "log", reason)
-        self._storage.update_task(task_id, status="blockiert", error=reason, finished_at=now_iso(),
-                                  report_md=f"# Angehalten – keine Freigabe\n\n**Datenbank:** {task.db_path}\n\n{reason}\n\n"
-                                            "Es wurde keine KI-Anfrage gesendet und nichts verändert.")
-        return task_id
+    def _risk(self, step: m.PlanStep) -> m.Risk:
+        """Risikostufe mit Blick auf den TATSÄCHLICHEN Feldtyp: eine verlustfreie Typerweiterung (z. B. Kurzer → Langer
+        Text) ist keine löschende Änderung. Unbekannter Ausgangstyp = die vorsichtige Einstufung bleibt."""
+        action = step.action
+        if isinstance(action, m.ChangeFieldType) and action.size is None:
+            try:
+                table = self._access.schema().table(action.table)
+                field = table.field(action.field) if table else None
+            except Exception:
+                field = None
+            if field is not None and (field.type, action.new_type) in m.LOSSLESS_TYPE_CHANGES:
+                return "modify"
+        return step.risk
 
     @staticmethod
     def _data_evidence(solution: m.AgentSolution, verifications: list[Verification]) -> list[str]:
@@ -235,6 +220,11 @@ class TaskPipeline:
             if v.passed and isinstance(action, m.AnswerQuery):
                 answer = next((c.detail for c in v.checks if c.name == "Antwort erneut ermittelt"), "")
                 lines.append(f"Schritt {v.step_id}: Frage „{action.question}“ per Abfrage beantwortet – Ergebnis: {answer}")
+                continue
+            if isinstance(action, m.CreateForm):  # gemessene Layoutbreiten mit Standardbreite (z. B. „verschmälern“)
+                widths = next((c for c in v.checks if c.name == "Spaltenbreiten im Layout" and c.passed), None)
+                if widths is not None:
+                    lines.append(f"Schritt {v.step_id} (create_form „{action.target()}“): in Access gemessen – {widths.detail}")
                 continue
             if not v.passed or not isinstance(action, m.InsertRecords | m.UpdateRecords | m.ImportData):
                 continue
@@ -278,7 +268,9 @@ class TaskPipeline:
                 schema = self._access.schema(refresh=True)
                 lowered = task.text.lower()
                 named = [o.name.lower() for o in schema.forms] + [o.name.lower() for o in schema.reports]
-                if any(f"„{n}“" in lowered or f'"{n}"' in lowered for n in named):
+                # E-01 SI: die Aufgabe nannte den Bericht nicht – ohne Bereiche/Farben wählte die KI das Datenblatt.
+                # Bei wenigen Formularen/Berichten deshalb immer die Details mitgeben (kostet je Objekt < 1 s).
+                if named and (len(named) <= 6 or any(f"„{n}“" in lowered or f'"{n}"' in lowered for n in named)):
                     # „Bearbeiten Sie den Bericht …“: die Planung braucht Bereiche, Steuerelemente und Gruppen
                     schema = self._access.schema(refresh=True, detailed_objects=True)
             solution =self._analyzer.analyze(task, schema, cancel=cancel, extra_context=self._source_files(task.text, db_path))
@@ -319,8 +311,12 @@ class TaskPipeline:
         self, prepared: PreparedTask, interaction: Interaction, *, cancel: threading.Event | None = None
     ) -> TaskOutcome:
         try:
-            return self._execute(prepared, interaction, cancel=cancel)
+            outcome = self._execute(prepared, interaction, cancel=cancel)
+            if outcome.status not in ("erfolgreich", "blockiert", "beantwortet"):
+                self._analyzer.clear_cache()  # nicht gelöst/abgelehnt: beim nächsten Mal neu planen
+            return outcome
         except Exception as exc:
+            self._analyzer.clear_cache()
             # Unerwarteter Abbruch: der Verlauf darf nie auf „läuft“ stehen bleiben (und nie „erfolgreich“ zeigen)
             try:
                 record = self._storage.get_task(prepared.task_id)
@@ -414,16 +410,14 @@ class TaskPipeline:
             validation=prepared.validation,
             warnings=prepared.warnings,
         )
-        trusted, trust_source = self.approval_source(db_path)
-        destructive = [s for s in solution.plan.steps if s.risk == "destructive"]
-        if trusted and not destructive:
-            # Vom Benutzer ausdrücklich freigegebene Übungsdatenbank bzw. Lernprogramm, nur nicht löschende Schritte:
-            # keine erneute Rückfrage. Prüfungsschutz (oben) und Sicherung (unten) gelten unverändert.
-            event("log", f"{trust_source} – nicht löschende Schritte ohne erneute Bestätigung.", db=db_path)
+        destructive = [s for s in solution.plan.steps if self._risk(s) == "destructive"]
+        if not destructive:
+            # Der Benutzer hat die Bearbeitung selbst gestartet (Alt+W bzw. Dashboard): nicht löschende Schritte ohne
+            # weitere Rückfrage. Prüfungsschutz (oben) und Sicherung (unten) gelten unverändert.
+            event("log", "Vom Benutzer gestartet – nicht löschende Schritte ohne Rückfrage.", db=db_path)
         elif not _can_ask(interaction):
-            # Hintergrundbetrieb: kein Dialog öffnet sich von selbst. Fehlende Freigabe = anhalten, nie umgehen.
-            reason = ("Der Plan enthält löschende Schritte – die werden nur bei geöffnetem Dashboard bestätigt."
-                      if trusted else self.missing_approval_hint(db_path))
+            # Hintergrundbetrieb: kein Dialog öffnet sich von selbst. Löschende Schritte = anhalten, nie automatisch.
+            reason = "Der Plan enthält löschende Schritte – die werden nur bei geöffnetem Dashboard bestätigt."
             event("log", reason)
             return finish("blockiert", reason)
         else:
@@ -434,10 +428,6 @@ class TaskPipeline:
             # Ohne gemerkte Freigabe gilt die Übungs-Bestätigung nur für diesen einen Plan
             if not decision.practice_confirmed:
                 return finish("blockiert", "Ohne Bestätigung, dass es sich um eine Übungsdatenbank handelt, wird nichts geändert.")
-            if decision.trust and not trusted:
-                self.settings.security.trusted_databases.append(trust_key(db_path))
-                self._storage.save_settings(self.settings)
-                event("log", "Übungsdatenbank als vertrauenswürdig gemerkt (in den Einstellungen widerrufbar).", db=db_path)
             event("log", "Plan freigegeben.", db=db_path)
 
         # --- Sicherung -------------------------------------------------------------------------
@@ -459,8 +449,12 @@ class TaskPipeline:
             max_lock_retries=self.settings.access.lock_retry_count,
             lock_delay_s=self.settings.access.lock_retry_delay_s,
         )
+        detail_actions = (m.CreateForm | m.CreateReport | m.SetConditionalFormat | m.ModifyReport | m.ModifyForm
+                          | m.CreateNavigationForm)
+        needs_detail = any(isinstance(s.action, detail_actions) for s in solution.plan.steps)
         try:
-            before = self._access.schema(refresh=True)
+            # mit Details, wenn Formulare/Berichte geändert werden: sonst fehlen deren Änderungen im Bericht
+            before = self._access.schema(refresh=True, detailed_objects=needs_detail)
             for step in solution.plan.steps:
                 if cancel.is_set():
                     raise TaskCancelledError()
@@ -510,8 +504,6 @@ class TaskPipeline:
 
         # --- Ergebnis gegen die Aufgabenstellung prüfen ------------------------------------------
         self._access.invalidate_schema()
-        needs_detail = any(isinstance(s.action, m.CreateForm | m.CreateReport | m.SetConditionalFormat | m.ModifyReport
-                                      | m.ModifyForm | m.CreateNavigationForm) for s in solution.plan.steps)
         try:
             after = self._access.schema(refresh=True, detailed_objects=needs_detail)
             changes[:] = schema_diff(before, after)
@@ -571,6 +563,7 @@ class TaskPipeline:
                 task_text=prepared.task.text, requirements=solution.analysis.requirements,
                 schema_after=after, changes=changes, cancel=cancel,
                 verified=self._data_evidence(solution, verifications),
+                sources=self._source_files(prepared.task.text, prepared.db_path or self._access.path),
             )
         except TaskCancelledError:
             return finish("ausgeführt", "Anforderungsprüfung abgebrochen.")
@@ -580,6 +573,9 @@ class TaskPipeline:
         # Selbstkorrektur: begrenzte Zyklen Ursache → Korrektur → erneute Prüfung, nur solange es Fortschritt gibt
         after, report = self._correct(prepared, report, before, after, results, verifications, interaction,
                                       recovery, cancel, event, corrections, correction_steps, open_checks)
+        # Ein späterer Schritt ANDERER Art am selben Objekt (z. B. Formular neu angelegt) kann ein früher bestätigtes
+        # Ergebnis (z. B. bedingte Formatierung) zerstört haben → gegen den Endzustand neu prüfen
+        verifications.extend(self._reverify_touched([*solution.plan.steps, *correction_steps], results))
         changes[:] = schema_diff(before, after)
         requirements[0] = report
         if report.unmet:
@@ -612,7 +608,7 @@ class TaskPipeline:
         state = RecoveryState()
 
         # Destruktive Schritte: eigene Bestätigung zusätzlich zur Planfreigabe
-        if step.risk == "destructive":
+        if self._risk(step) == "destructive":
             if not _can_ask(interaction):
                 return StepResult(step_id=step.id, status="skipped", message=_NO_DIALOG + "löschender Schritt nicht ausgeführt.")
             reason, exact = self._impact(step)
@@ -775,6 +771,7 @@ class TaskPipeline:
                     verified=self._data_evidence(m.AgentSolution.model_construct(
                         analysis=prepared.solution.analysis,
                         plan=m.ExecutionPlan.model_construct(steps=all_steps, notes=[])), verifications),
+                    sources=self._source_files(prepared.task.text, prepared.db_path or self._access.path),
                 )
             except TaskCancelledError:
                 raise
@@ -916,8 +913,8 @@ class TaskPipeline:
             choice = policy  # type: ignore[assignment]
         if choice == "rename" and not renamable:
             choice = "skip"
-        if choice == "overwrite" and not replaceable:
-            choice = "skip"
+        if choice == "overwrite" and (not replaceable or not _can_ask(interaction)):
+            choice = "skip"  # Ersetzen löscht das Vorhandene – im Hintergrund nie ohne Bestätigung (auch nicht per Einstellung)
         return choice, suggestion
 
     @staticmethod

@@ -1,7 +1,9 @@
 """Task Reader: erfasst Aufgabenstellungen aus Text, Bild oder dem Aufgabenfenster."""
 from __future__ import annotations
 
+import hashlib
 import os
+import time
 from pathlib import Path
 
 from app.ai import prompts
@@ -15,22 +17,20 @@ from app.vision import capture, tecomp
 
 log = get_logger(__name__)
 
+#: KI-Bilderkennung desselben Fensterbildes wird so lange wiederverwendet (keine zweite Anfrage für denselben Inhalt)
+VISION_CACHE_SECONDS = 30 * 60
+
 
 class TaskReader:
     def __init__(self, settings: AppSettings, ai: ProviderManager) -> None:
         self._settings = settings
         self._ai = ai
+        self._vision_cache: dict[str, tuple[float, str]] = {}
 
-    def _workshop(self, db_path: str) -> Path | None:
-        """Workshop-Ordner: aus der im Dashboard bestätigten Zuordnung dieser Datei, sonst eindeutig automatisch –
-        automatisch nur für te.comp-Dateien im Arbeitsordner (eine eigene gleichnamige Datei bekommt keinen Kontext)."""
-        from app.security import programs
-
-        assigned = self._settings.security.program_assignments.get(programs.file_key(db_path), "")
-        base = tecomp.install_dir()
-        if assigned.startswith(programs.WORKSHOP_PREFIX) and base is not None:
-            folder = base / "access" / "workshops" / assigned[len(programs.WORKSHOP_PREFIX):]
-            return folder if folder.is_dir() else None
+    @staticmethod
+    def _workshop(db_path: str) -> Path | None:
+        """Workshop-Ordner, eindeutig automatisch erkannt – nur für te.comp-Dateien im Arbeitsordner (eine eigene,
+        gleichnamige Datei bekommt keinen Workshop-Kontext)."""
         return tecomp.workshop_for(db_path) if tecomp.in_tecomp_workdir(db_path) else None
 
     @staticmethod
@@ -55,7 +55,7 @@ class TaskReader:
             db_path, title = exercise
             page = tecomp.task_page(title)
             if page is not None:
-                text = tecomp.html_to_text(page.read_text(encoding="utf-8", errors="replace"))
+                text = tecomp.html_to_text(tecomp.read_page(page))
                 if len(text) >= 5:
                     images: list[bytes] = []
                     try:
@@ -72,6 +72,15 @@ class TaskReader:
         # Datenbank der Aufgabe: te.comp-Übung, sonst die in Access geöffnete Datei – egal wie sie heißt (Workshops,
         # eigene Übungsdatenbanken)
         task.db_path = exercise[0] if exercise is not None else (tecomp.open_access_database() if is_tecomp else "")
+        info = (tecomp.screeninfo_page(Path(task.db_path).name)
+                if is_tecomp and task.db_path and tecomp.in_tecomp_workdir(task.db_path) else None)
+        if info is not None:  # Bildschirminfo-Übung: die Info zeigt, in welcher Ansicht/an welchem Objekt es gemeint ist
+            task.text += ("\n\nTE.COMP-BILDSCHIRMINFO ZU DIESER ÜBUNG (erklärt Ansicht und Objektart der Aufgabe):\n"
+                          + tecomp.html_to_text(tecomp.read_page(info)))
+            try:
+                task.images = tecomp.task_images(info)
+            except Exception as exc:
+                log.warning("Abbildungen der Bildschirminfo nicht lesbar: %s", exc)
         workshop = self._workshop(task.db_path) if is_tecomp and task.db_path and exercise is None else None
         if workshop is not None and (context := tecomp.workshop_context(workshop)):
             task.text += (f"\n\nHINTERGRUND DES TE.COMP-WORKSHOPS „{workshop.name}“ (aus den Workshop-Dateien – nur zum "
@@ -89,12 +98,23 @@ class TaskReader:
         # OCR liefert zu wenig -> multimodales KI-Modell als Rückfall
         if (allow_vision and len(text) < self._settings.capture.min_text_length
                 and self._settings.ai.use_vision and self._ai.is_configured()):
+            identity = f"{self._settings.ai.provider}|{self._ai.model_for('vision')}|".encode()
+            key, now = hashlib.sha256(identity + png).hexdigest(), time.monotonic()
+            cached = self._vision_cache.get(key)
             try:
-                answer = self._ai.complete(
-                    system=prompts.VISION_SYSTEM,
-                    messages=[ChatMessage(role="user", content="Lies die Aufgabenstellung.", images=[ImageInput(data=png)])],
-                    purpose="vision",
-                ).text.strip()
+                if cached is not None and now - cached[0] < VISION_CACHE_SECONDS:
+                    answer = cached[1]
+                    log.info("Bilderkennung unveränderten Fensterinhalts wiederverwendet (keine KI-Anfrage)")
+                else:
+                    answer = self._ai.complete(
+                        system=prompts.VISION_SYSTEM,
+                        messages=[ChatMessage(role="user", content="Lies die Aufgabenstellung.",
+                                              images=[ImageInput(data=png)])],
+                        purpose="vision",
+                    ).text.strip()
+                    self._vision_cache = {k: v for k, v in self._vision_cache.items()
+                                          if now - v[0] < VISION_CACHE_SECONDS}
+                    self._vision_cache[key] = (now, answer)
                 if answer and "KEINE_AUFGABE" not in answer:
                     text, method = answer, "vision"
             except ProviderError as exc:

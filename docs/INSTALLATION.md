@@ -41,11 +41,11 @@ Eigene EXE bauen: `python build.py` (PyInstaller, inklusive Selbsttest).
    der Anthropic-Konsole widerrufen.
 
 ## Erste Schritte
-1. Dashboard → Karte „Lernprogramm-Freigabe“: Lernprogramm/Workshop wählen → „freigeben (24 h)“. Eigene Datenbanken
-   einmal „diesem Lernprogramm zuordnen“ oder im Dashboard mit Planfreigabe bearbeiten.
-2. Übung öffnen und **Alt+W** drücken. Statuspunkt oben links: gelb = arbeitet, grün = vollständig geprüft,
+1. Übung in Access öffnen (te.comp-Übung, Workshop oder eigene Datenbank – der Name ist egal) und **Alt+W** drücken.
+   Es gibt keine Freigaben mehr: Alt+W ist die bewusste Aktion. Löschende Schritte werden nur bei geöffnetem
+   Dashboard einzeln bestätigt, im Hintergrund hält WIDS dann an. Statuspunkt oben links: gelb = arbeitet, grün = vollständig geprüft,
    rot = nicht abgeschlossen (Grund im Verlauf).
-3. Vor jeder Änderung wird automatisch eine Sicherung erstellt (Verlauf → „Sicherung dieser Aufgabe wiederherstellen“).
+2. Vor jeder Änderung wird automatisch eine Sicherung erstellt (Verlauf → „Sicherung dieser Aufgabe wiederherstellen“).
 
 ## Nur für Übungen
 WIDS sperrt sich, wenn eine Prüfungsumgebung läuft (z. B. Next Exam, Safe Exam Browser), und klickt nie „Prüfen“,

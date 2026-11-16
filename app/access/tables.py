@@ -33,6 +33,20 @@ _CUSTOM_PROPS: dict[str, int] = {
     "InputMask": c.DB_TEXT,
     "DecimalPlaces": c.DB_BYTE,
 }
+#: Nachschlagefeld-Eigenschaften (DisplayControl zuerst – die übrigen gehören dazu)
+_LOOKUP_PROPS: dict[str, int] = {
+    "DisplayControl": c.DB_INTEGER,
+    "RowSourceType": c.DB_TEXT,
+    "RowSource": c.DB_MEMO,
+    "BoundColumn": c.DB_INTEGER,
+    "ColumnCount": c.DB_INTEGER,
+    "ColumnHeads": c.DB_BOOLEAN,
+    "ColumnWidths": c.DB_TEXT,
+    "ListRows": c.DB_INTEGER,
+    "ListWidth": c.DB_TEXT,
+    "LimitToList": c.DB_BOOLEAN,
+    "AllowValueListEdits": c.DB_BOOLEAN,
+}
 
 
 # --------------------------------------------------------------------------- Hilfsfunktionen
@@ -310,6 +324,9 @@ class TableOps:
         copied = 0
         with com_guard(f"Tabelle „{source}“ kopieren"):
             target = self._db.CreateTableDef(new_name)
+            if str(src.ValidationRule or ""):  # Tabellen-Gültigkeitsregel (z. B. [Ende]>=[Start])
+                target.ValidationRule = src.ValidationRule
+                target.ValidationText = src.ValidationText
             for fld in src.Fields:
                 dao_type = int(fld.Type)
                 if dao_type >= c.DB_ATTACHMENT:
@@ -355,6 +372,11 @@ class TableOps:
                     value = get_property(fld, prop, None)
                     if value not in (None, ""):
                         set_property(created.Fields(fld.Name), prop, value, dao_type)
+                if get_property(fld, "DisplayControl", None) not in (None, c.AC_TEXT_BOX):
+                    for prop, dao_type in _LOOKUP_PROPS.items():  # Nachschlagefeld vollständig übernehmen
+                        value = get_property(fld, prop, None)
+                        if value is not None:
+                            set_property(created.Fields(fld.Name), prop, value, dao_type)
             if with_data:
                 self._db.Execute(
                     f"INSERT INTO {quote_ident(new_name)} SELECT * FROM {quote_ident(source)}", c.DB_FAIL_ON_ERROR
@@ -798,6 +820,12 @@ class TableOps:
                 columns = [f.name for f in fields]
             elif header is not None and all(importer.clean_field_name(h, i).lower() in lower for i, h in enumerate(header)):
                 columns = [lower[importer.clean_field_name(h, i).lower()] for i, h in enumerate(header)]
+            elif header is not None:
+                # Überschriften vorhanden, aber nicht alle passen: nach Position zu raten würde Daten in falsche Felder
+                # schreiben (z. B. Familienname → Vorname) – die Zielfelder müssen ausdrücklich angegeben werden
+                unknown = [str(h) for i, h in enumerate(header) if importer.clean_field_name(h, i).lower() not in lower]
+                raise AccessError(f"Die Spalten {', '.join(unknown)} der Datei gibt es in „{table}“ nicht "
+                                  f"({', '.join(existing)}). Bitte die Zielfelder in Dateireihenfolge angeben (fields).")
             else:
                 editable = [str(f.Name) for f in tabledef.Fields
                             if access_type_from_dao(int(f.Type), int(f.Attributes)) != AccessType.AUTONUMBER]

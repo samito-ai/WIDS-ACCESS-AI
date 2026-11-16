@@ -21,13 +21,14 @@ def main() -> int:
     from app.core.context import AppContext
     from app.security.secrets import MemoryBackend, SecretStore
     from app.storage.database import Storage
-    from app.ui import main_window
     from app.ui.main_window import MainWindow
 
     app = QApplication.instance() or QApplication(sys.argv)
     ctx = AppContext(Storage(Path(os.environ["WIDS_DATA_DIR"]) / "screens.sqlite3"), SecretStore(MemoryBackend()))
     ctx.settings.hotkeys.enabled = False
-    main_window.tecomp.open_access_database = lambda: ""  # type: ignore[attr-defined]  # keine echten Fenster
+    from app.vision import tecomp
+
+    tecomp.open_access_database = lambda: ""  # keine echten Fenster
     from PySide6.QtCore import Qt
 
     window = MainWindow(ctx)

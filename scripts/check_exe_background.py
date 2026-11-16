@@ -1,13 +1,12 @@
 """Prüft die gebaute EXE im Hintergrundmodus – mit echten Prozessen, Fenstern und Tastenkürzeln.
 
-    python scripts\\check_exe_background.py dist\\WIDS-Access-AI.exe [--alt-w]
+    python scripts\\check_exe_background.py dist\\WIDS-Access-AI.exe [--alt-w-ausfuehren [--budget=0.30]]
 
 1. Start mit ``--background`` (genau der Befehl des Autostart-Eintrags): kein sichtbares Fenster
    (also kein Taskleisteneintrag), Symbol im Infobereich angelegt, Tastenkürzel registriert.
 2. Zweiter Start: endet sofort, die laufende Instanz zeigt ihr Statusfenster.
-3. Nur mit ``--alt-w`` (te.comp mit geöffneter Access-Übung, KEINE Freigabe): Tastenkürzel drücken → kein Fenster,
-   kein Dialog, kein Fokuswechsel, keine KI-Anfrage → Verlauf „blockiert“ mit Ursache, Statuspunkt rot, die
-   Übungsdatenbank bleibt unverändert. ``--alt-w-ausfuehren``: freigegebene Übung wird vollständig bearbeitet.
+3. Nur mit ``--alt-w-ausfuehren`` (in Access geöffnete Übung, ECHTE KI – kostet, harte Kostenbremse ``--budget``):
+   Tastenkürzel → die Übung wird ohne Fenster, Dialog oder Fokuswechsel vollständig bearbeitet.
 4. ``--quit``: die Instanz endet sauber, die Tastenkürzel sind wieder frei.
 5. Erneuter Start (wie nach einem Windows-Neustart über den Autostart) und erneutes Beenden.
 
@@ -130,29 +129,34 @@ def latest_task(data: str) -> str:
     return tasks[0].status if tasks else ""
 
 
-def alt_w_flow(exe: str, data: str, pids: set[int]) -> None:
-    """Ohne Freigabe: angehalten – kein Fenster, kein Dialog, kein Fokuswechsel, keine KI-Anfrage, roter Punkt."""
+def alt_w_connect(data: str, pids: set[int], exercise: str) -> None:
+    """Kostenlos (keine KI-Anfrage): Alt+W erfasst die geöffnete te.comp-Übung und verbindet sich AUTOMATISCH mit
+    ihrem Access; die Analyse endet danach am fehlenden Schlüssel des Testanbieters – nichts wird verändert."""
     before = win32gui.GetForegroundWindow()
-    print(f"      Vordergrundfenster vor dem Kürzel: „{win32gui.GetWindowText(before)[:60]}“")
     press_solve()
     focus_changes: list[str] = []
-    opened: list[str] = []
 
     def finished() -> str:
         if win32gui.GetForegroundWindow() != before:
             focus_changes.append(win32gui.GetWindowText(win32gui.GetForegroundWindow()))
-        opened.extend(t for _, _, t in windows(pids))
         status = latest_task(data)
         return status if status not in ("", "erkannt", "geplant", "läuft") else ""
 
     status = wait_for(finished, 120)
-    check("Alt+W ohne Freigabe: kein Fenster, kein Dialog, kein Fokuswechsel", not focus_changes and not opened)
-    check(f"Alt+W ohne Freigabe: angehalten und im Verlauf gespeichert („{status}“)", status == "blockiert")
-    check("Alt+W ohne Freigabe: Statuspunkt bleibt rot", bool(overlays(pids)))
     os.environ["WIDS_DATA_DIR"] = data
     from app.storage.database import Storage
 
-    check("Alt+W ohne Freigabe: keine KI-Anfrage gesendet", Storage().usage_summary("total").requests == 0)
+    record = Storage().list_tasks(limit=1)[0] if Storage().list_tasks(limit=1) else None
+    log_file = Path(data) / "logs" / "wids.log.jsonl"
+    log = log_file.read_text(encoding="utf-8", errors="replace") if log_file.exists() else ""
+    print(f"      Ergebnis: {status} – {record.error if record else ''}")
+    check("Alt+W: Aufgabe der geöffneten Übung erfasst", record is not None and bool(record.raw_text))
+    check("Alt+W: automatisch mit dem Access der Übung verbunden",
+          "verbunden" in log and Path(exercise).name.lower() in log.lower())
+    check("Alt+W: kein Fokuswechsel, kein Fenster, kein Dialog", not focus_changes and windows(pids) == [])
+    check("Alt+W: keine KI-Anfrage gesendet (Testanbieter ohne Schlüssel)",
+          Storage().usage_summary("total").requests == 0)
+    check("Alt+W: nichts verändert (keine Sicherung nötig)", record is not None and not record.backup_path)
 
 
 def alt_w_execute(data: str, pids: set[int]) -> None:
@@ -206,8 +210,17 @@ def main() -> int:
     settings.ui.first_run_done = True
     for name, combo in HOTKEYS.items():
         setattr(settings.hotkeys, name, combo)
+    exercise: tuple[str, str] | None = None
+    if "--alt-w-verbindung" in sys.argv:
+        from app.vision import tecomp
+
+        exercise = tecomp.open_exercise() or ((tecomp.open_access_database(), "") if tecomp.open_access_database() else None)
+        if exercise is None or not exercise[0]:
+            print("FEHLER keine Übung in te.comp/Access geöffnet")
+            return 1
+        settings.ai.provider = "openai"  # ohne hinterlegten Schlüssel: die Analyse endet vor jeder Netzwerkanfrage
+        print(f"      Übung: {exercise[0]} (Test ohne KI-Kosten)")
     if "--alt-w-ausfuehren" in sys.argv:
-        from app.agent.orchestrator import trust_key
         from app.vision import tecomp
 
         # jede in Access geöffnete Datenbank – nummerierte Übung, Workshop oder beliebiger Name
@@ -215,27 +228,10 @@ def main() -> int:
         if exercise is None or not exercise[0]:
             print("FEHLER keine Datenbank in Access geöffnet")
             return 1
-        from app.security import programs
-
-        choice = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--zuordnen=")), "")
-        if choice:  # wie im Dashboard: „Geöffnete Datenbank diesem Lernprogramm zuordnen …“ (genau dieser Pfad)
-            target = next((p for p in programs.load_programs() if p.id == choice), None)
-            if target is None:
-                print(f"FEHLER unbekanntes Lernprogramm/Workshop „{choice}“")
-                return 1
-            programs.assign(settings.security.program_assignments, exercise[0], target)
-            print(f"      Im Dashboard zugeordnet: {exercise[0]} → {target.caption}")
-        program = programs.program_for(exercise[0], assignments=settings.security.program_assignments)
-        if program is not None:  # neues Bedienkonzept: 24-h-Freigabe des Lernprogramms (wie im Dashboard bestätigt)
-            programs.approve(settings.security.program_approvals, program)
-            print(f"      Lernprogramm freigegeben (24 h): {program.caption} ({program.id})")
-        else:
-            settings.security.trusted_databases = [trust_key(exercise[0])]  # = vom Benutzer freigegebene Übung
-            print("      Kein eindeutiges Lernprogramm – Übungsdatei einzeln freigegeben")
         budget = float(next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--budget=")), "0.60"))
         settings.ai.cost_limit_usd, settings.ai.cost_limit_period = budget, "total"  # harte Kostenbremse
         print(f"      Kostenbremse: {budget:.2f} $")
-        print(f"      Freigegebene Übung: {exercise[0]}\n      Datenordner (Verlauf, Bericht): {data}")
+        print(f"      Übung: {exercise[0]}\n      Datenordner (Verlauf, Bericht): {data}")
     Storage().save_settings(settings)
     if not check("Prüf-Kürzel ist vor dem Start frei", not hotkey_taken()):
         return 1
@@ -264,8 +260,8 @@ def main() -> int:
 
     if "--alt-w-ausfuehren" in sys.argv:
         alt_w_execute(data, pids)
-    elif "--alt-w" in sys.argv:
-        alt_w_flow(exe, data, pids)
+    elif "--alt-w-verbindung" in sys.argv and exercise is not None:
+        alt_w_connect(data, pids, exercise[0])
     elif not any((p.info["name"] or "").lower() == "tecomptraining.exe" for p in psutil.process_iter(["name"])):
         # ohne te.comp: Alt+W liest höchstens lokal ein fremdes Fenster, sendet nichts und meldet das sichtbar
         before = win32gui.GetForegroundWindow()

@@ -32,6 +32,16 @@ def schema_diff(before: DatabaseSchema, after: DatabaseSchema) -> list[str]:
         old_names, new_names = _by_name(old), _by_name(new)
         lines += [f"neu: {label} „{new_names[k].name}“" for k in new_names.keys() - old_names.keys()]
         lines += [f"entfernt: {label} „{old_names[k].name}“" for k in old_names.keys() - new_names.keys()]
+    for label, old_objs, new_objs in (("Formular", before.forms, after.forms), ("Bericht", before.reports, after.reports)):
+        old_by, new_by = _by_name(old_objs), _by_name(new_objs)
+        for key in sorted(old_by.keys() & new_by.keys()):
+            a, b = old_by[key], new_by[key]
+            if not (a.detailed and b.detailed):
+                continue
+            for prop in sorted(set(a.properties) | set(b.properties)):
+                if a.properties.get(prop) != b.properties.get(prop):
+                    lines.append(f"{label} „{b.name}“: {prop} {str(a.properties.get(prop, '(nichts)'))[:150]} → "
+                                 f"{str(b.properties.get(prop, '(nichts)'))[:150]}")
     old_tables, new_tables = _by_name(before.tables), _by_name(after.tables)
     for key in sorted(old_tables.keys() & new_tables.keys()):
         old, new = old_tables[key], new_tables[key]

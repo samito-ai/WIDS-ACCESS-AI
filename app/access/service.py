@@ -137,6 +137,41 @@ class AccessService:
     def path(self) -> str:
         return self._engine.path if self._engine else ""
 
+    def is_alive(self) -> bool:
+        """Lebt die Verbindung noch? (te.comp startet Access beim Neuladen/Übungswechsel neu – derselbe Pfad, aber ein
+        neues Access.) Eine tote Verbindung wird verworfen."""
+        engine = self._engine
+        if engine is None:
+            return False
+        try:
+            alive = bool(self._worker.call(engine.session.is_alive, 10))
+        except AccessTimeoutError:
+            return True  # Access ist beschäftigt (lange Operation) – das ist kein Beweis für eine tote Verbindung
+        except Exception:
+            alive = False
+        if not alive:
+            self._drop_dead_engine(engine)
+        return alive
+
+    def _drop_dead_engine(self, engine: AccessEngine | None = None) -> None:
+        """Nur die nachweislich tote Verbindung verwerfen – nie eine inzwischen neu aufgebaute."""
+        dead = engine or self._engine
+
+        def close_if_still_current() -> None:  # läuft im COM-Thread: kein Verbinden dazwischen möglich
+            if dead is not None and dead is self._engine:
+                log.warning("Access-Verbindung ist tot (Access geschlossen/neu gestartet) – sie wird verworfen")
+                # kein hartes Beenden: eine wirklich tote Instanz ist schon weg; eine doch erreichbare eigene Instanz
+                # wird ordentlich geschlossen (sonst blieb sie verwaist und blockierte die nächste – gemessen)
+                self._close_engine()
+
+        try:
+            self._worker.call(close_if_still_current, 10)
+        except Exception as exc:
+            log.debug("Schließen der toten Verbindung nicht möglich: %s", exc)
+            if dead is not None and dead is self._engine:
+                self._engine = None
+        self._schema_cache = None
+
     @property
     def mode(self) -> str:
         return self._engine.mode if self._engine else ""
@@ -156,6 +191,7 @@ class AccessService:
                 raise
             engine = self._engine
             if engine is not None and not self._worker.call(engine.session.is_alive, 10):
+                self._drop_dead_engine(engine)  # sonst scheitert jedes weitere Alt+W an derselben toten Verbindung
                 raise AccessError("Die Verbindung zu Access wurde getrennt (Access wurde geschlossen oder ist "
                                   "abgestürzt). Bitte die Übung neu verbinden – die Sicherung bleibt erhalten.",
                                   detail=f"{type(exc).__name__}: {exc}") from exc
@@ -269,14 +305,6 @@ class AccessService:
         except WidsError as exc:
             log.debug("Erkennung der laufenden Datenbank fehlgeschlagen: %s", exc)
             return ""
-
-    def is_alive(self) -> bool:
-        if self._engine is None:
-            return False
-        try:
-            return self._worker.call(lambda: bool(self._engine and self._engine.session.is_alive()), 5)
-        except WidsError:
-            return False
 
     def status(self) -> ConnectionStatus:
         engine = self._engine

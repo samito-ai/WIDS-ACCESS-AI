@@ -140,9 +140,16 @@ class QueryOps:
     def describe(self, querydef: Any) -> QueryInfo:
         type_code = int(querydef.Type)
         fields: list[str] = []
+        error = ""
         if type_code in (c.DB_Q_SELECT, c.DB_Q_CROSSTAB, c.DB_Q_SET_OPERATION):
-            with contextlib.suppress(Exception):
+            try:
                 fields = [str(f.Name) for f in querydef.Fields]
+                if not fields and int(querydef.Parameters.Count) == 0:  # fehlende Eingabetabelle: keine Felder, kein Fehler
+                    querydef.OpenRecordset(c.DB_OPEN_SNAPSHOT).Close()
+            except Exception as exc:  # z. B. „Eingabetabelle … nicht gefunden“: die Abfrage ist so nicht ausführbar
+                details = exc.args[2] if len(getattr(exc, "args", ())) > 2 else None
+                error = str(details[2] if isinstance(details, tuple) and len(details) > 2 and details[2] else exc)
+                error = " ".join(error.split())[:200]
         parameters: list[QueryParameter] = []
         with contextlib.suppress(Exception):
             parameters = [QueryParameter(name=_param_name(p), type=int(p.Type)) for p in querydef.Parameters]
@@ -156,6 +163,7 @@ class QueryOps:
             parameters=parameters,
             description=str(get_property(querydef, "Description", "")),
             datasheet=datasheet_summary(querydef, with_formats=True),
+            error=error,
         )
 
     def list_queries(self) -> list[QueryInfo]:

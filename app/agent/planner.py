@@ -96,6 +96,14 @@ class _State:
     def __init__(self, schema: DatabaseSchema | None) -> None:
         self.known = schema is not None
         self.schema = schema.model_copy(deep=True) if schema else DatabaseSchema(path="", name="")
+        self._initial_structure = self._structure()
+
+    def _structure(self) -> tuple[set[str], set[tuple[str, str]]]:
+        return {t.name.lower() for t in self.schema.tables}, {(q.name.lower(), q.sql) for q in self.schema.queries}
+
+    def structure_changed(self) -> bool:
+        """Hat ein früherer Planschritt Tabellen oder Abfragen angelegt/geändert (z. B. eine Quelle repariert)?"""
+        return self._structure() != self._initial_structure
 
     def table(self, name: str) -> TableInfo | None:
         return self.schema.table(name)
@@ -691,6 +699,7 @@ class PlanValidator:
     def _check_create_form(self, step: m.PlanStep, state: _State, report: ValidationReport) -> None:
         action: m.CreateForm = step.action  # type: ignore[assignment]
         form = action.form
+        self._check_broken_source(step, state, report, form.record_source)
         if form.record_source and state.known:
             if not state.source_exists(form.record_source) and not form.record_source.upper().startswith("SELECT "):
                 self._err(report, step, f"Die Datenquelle „{form.record_source}“ existiert nicht.")
@@ -717,6 +726,7 @@ class PlanValidator:
     def _check_create_report(self, step: m.PlanStep, state: _State, report: ValidationReport) -> None:
         action: m.CreateReport = step.action  # type: ignore[assignment]
         spec = action.report
+        self._check_broken_source(step, state, report, spec.record_source)
         if state.known:
             if not state.source_exists(spec.record_source) and not spec.record_source.upper().startswith("SELECT "):
                 self._err(report, step, f"Die Datenquelle „{spec.record_source}“ existiert nicht.")
@@ -767,6 +777,16 @@ class PlanValidator:
         is_sql = source is not None and source.lstrip()[:6].upper() == "SELECT" and source.lstrip()[6:7].isspace()
         if source and state.known and not state.source_exists(source) and not is_sql:
             self._err(report, step, f"Die neue Datenquelle „{source}“ existiert nicht.")
+        self._check_broken_source(step, state, report, source)
+
+    def _check_broken_source(self, step: m.PlanStep, state: _State, report: ValidationReport, source: str | None) -> None:
+        """Eine Abfrage, die Access nicht ausführen kann, ist keine Datenquelle (Formular bliebe leer/fragt nach
+        Parametern) – die KI soll die zugrunde liegende Tabelle nehmen oder die Abfrage zuerst reparieren."""
+        query = state.schema.query(source) if source and state.known else None
+        # nach einer Strukturänderung im Plan (Quelle repariert/angelegt) ist der gelesene Fehler evtl. überholt
+        if query is not None and query.error and not state.structure_changed():
+            self._err(report, step, f"Die Abfrage „{source}“ ist nicht ausführbar ({query.error}). Verwende die "
+                                    "Tabelle mit den benötigten Feldern oder repariere die Abfrage zuerst.")
 
     def _check_modify_report(self, step: m.PlanStep, state: _State, report: ValidationReport) -> None:
         action: m.ModifyReport = step.action  # type: ignore[assignment]

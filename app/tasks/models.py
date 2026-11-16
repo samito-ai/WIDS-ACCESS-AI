@@ -194,6 +194,15 @@ class RenameField(_Action):
         return f"{self.table}.{self.old_name}"
 
 
+#: Typumwandlungen ohne möglichen Datenverlust (der neue Typ fasst jeden Wert des alten): gelten als normale Änderung
+LOSSLESS_TYPE_CHANGES: frozenset[tuple[AccessType, AccessType]] = frozenset({
+    (AccessType.SHORT_TEXT, AccessType.LONG_TEXT),
+    (AccessType.BYTE, AccessType.INTEGER), (AccessType.BYTE, AccessType.LONG), (AccessType.BYTE, AccessType.DOUBLE),
+    (AccessType.INTEGER, AccessType.LONG), (AccessType.INTEGER, AccessType.DOUBLE),
+    (AccessType.LONG, AccessType.DOUBLE), (AccessType.SINGLE, AccessType.DOUBLE),
+})
+
+
 class ChangeFieldType(_Action):
     action: Literal["change_field_type"] = "change_field_type"
     #: Typumwandlungen können Daten abschneiden oder verwerfen

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -55,12 +54,10 @@ from app.core import autostart
 from app.core.context import AppContext
 from app.core.errors import HotkeyError, TaskCancelledError, WidsError
 from app.core.logging_setup import get_logger
-from app.security import programs
 from app.tasks.models import TASK_TYPE_LABELS, CapturedTask, PlanStep, TaskType
 from app.ui import theme
 from app.ui.compact import CompactWindow, app_icon
 from app.ui.overlay import StatusOverlay
-from app.vision import tecomp
 from app.vision.capture import TECOMP_PROCESS
 
 log = get_logger(__name__)
@@ -313,8 +310,7 @@ class MainWindow(QMainWindow):
 
     def _show_page(self, index: int) -> None:
         self.stack.setCurrentIndex(index)
-        {0: self.refresh_dashboard, 3: self.refresh_explorer, 4: self.refresh_history,
-         5: self._refresh_settings_page}.get(index, lambda: None)()
+        {0: self.refresh_dashboard, 3: self.refresh_explorer, 4: self.refresh_history}.get(index, lambda: None)()
 
     def bring_to_front(self, page: int, *, full: bool = False) -> None:
         """Zeigt eine Ansicht. Nur ``full=True`` (ausdrückliche Benutzeraktion) öffnet das Hauptfenster und holt es
@@ -400,23 +396,6 @@ class MainWindow(QMainWindow):
         actions.addWidget(button("Trennen", self.disconnect_db))
         actions.addStretch()
         layout.addLayout(actions)
-        frame, box = card("Lernprogramm-Freigabe (24 Stunden)")
-        self.program_info = QLabel("–", wordWrap=True)
-        box.addWidget(self.program_info)
-        row = QHBoxLayout()
-        self.program_combo = QComboBox()
-        row.addWidget(self.program_combo, 1)
-        row.addWidget(button("Lernprogramm freigeben (24 h) …", self.approve_program, "primary"))
-        row.addWidget(button("Freigabe widerrufen", self.revoke_program))
-        box.addLayout(row)
-        row = QHBoxLayout()
-        row.addWidget(button("Geöffnete Datenbank diesem Lernprogramm zuordnen …", self.assign_open_database))
-        row.addWidget(button("Zuordnung aufheben", self.unassign_open_database))
-        row.addStretch()
-        box.addLayout(row)
-        layout.addWidget(frame)
-        self._programs: list[programs.Program] | None = None  # einmal aus te.comp gelesen
-        self._detected_program = ""
         frame, box = card("Letzte Aufgaben")
         self.dash_tasks = QListWidget()
         self.dash_tasks.itemDoubleClicked.connect(lambda _: self.nav.setCurrentRow(4))
@@ -454,86 +433,6 @@ class MainWindow(QMainWindow):
         self.dash_stats.setText("Häufigste Aufgabentypen: " + ", ".join(
             f"{TASK_TYPE_LABELS.get(TaskType(t), t) if t in TaskType._value2member_map_ else t} ({ok}/{n} erfolgreich)"
             for t, n, ok in stats) if stats else "")
-        self.refresh_programs()
-
-    # ------------------------------------------------------------------ Lernprogramm-Freigabe
-    def refresh_programs(self) -> None:
-        """Lernprogramme aus te.comp, das zur geöffneten Übung gehörende vorauswählen, gültige Freigaben anzeigen."""
-        if self._programs is None:
-            self._programs = programs.load_programs()
-            for program in self._programs:
-                self.program_combo.addItem(f"{program.caption} ({program.id})", program.id)
-        open_db = tecomp.open_access_database()  # jede in Access geöffnete Datei, egal wie sie heißt
-        assignments = self.ctx.settings.security.program_assignments
-        current = programs.program_for(open_db, programs=self._programs, assignments=assignments) if open_db else None
-        if current is not None and current.id != self._detected_program:  # nur bei Übungswechsel, nie gegen die Wahl
-            self.program_combo.setCurrentIndex(self.program_combo.findData(current.id))
-        self._detected_program = current.id if current else ""
-        approvals = self.ctx.settings.security.program_approvals
-        active = sorted((a for a in approvals if a.active()), key=lambda a: a.expires_at)
-        how = "zugeordnet" if open_db and programs.file_key(open_db) in assignments else "erkannt"
-        lines = [f"Geöffnete Datenbank: {Path(open_db).name if open_db else 'keine'} → "
-                 + (f"{current.caption} ({how})" if current else
-                    "nicht eindeutig zugeordnet – Lernprogramm wählen und „zuordnen“")]
-        lines += [f"✓ „{a.caption}“ freigegeben bis {datetime.fromisoformat(a.expires_at).astimezone():%d.%m. %H:%M}"
-                  for a in active] or ["Kein Lernprogramm freigegeben."]
-        if not self._programs:
-            lines.append("te.comp-training ist nicht installiert – keine Lernprogramme gefunden.")
-        self.program_info.setText("\n".join(lines))
-
-    def approve_program(self) -> None:
-        """Einmalige, bewusste Freigabe im Dashboard: gilt 24 h für alle eindeutig zugehörigen Übungsdateien."""
-        program = next((p for p in self._programs or [] if p.id == self.program_combo.currentData()), None)
-        if program is None:
-            return
-        answer = QMessageBox.question(
-            self, "Lernprogramm freigeben",
-            f"Ich bestätige: Die te.comp-Übungsdatenbanken des Lernprogramms „{program.caption}“ sind Übungen und "
-            "keine benotete Prüfung.\n\nDie Freigabe gilt 24 Stunden und nur für Übungsdateien, die eindeutig zu "
-            "diesem Lernprogramm gehören. Prüfungsschutz und Sicherung bleiben aktiv; löschende Schritte werden "
-            "weiterhin einzeln im Dashboard bestätigt.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
-        if answer != QMessageBox.StandardButton.Yes:
-            return
-        entry = programs.approve(self.ctx.settings.security.program_approvals, program)
-        self.ctx.storage.save_settings(self.ctx.settings)
-        log.info("Lernprogramm %s („%s“) freigegeben bis %s", program.id, program.caption, entry.expires_at)
-        self.refresh_programs()
-
-    def assign_open_database(self) -> None:
-        """Einmalige, bewusste Zuordnung der geöffneten Datei (genau dieser Pfad) zum gewählten Lernprogramm/Workshop."""
-        open_db = tecomp.open_access_database()
-        program = next((p for p in self._programs or [] if p.id == self.program_combo.currentData()), None)
-        if not open_db or program is None:
-            QMessageBox.information(self, APP_NAME, "In Access ist keine Datenbank geöffnet." if not open_db
-                                    else "Bitte zuerst ein Lernprogramm wählen.")
-            return
-        answer = QMessageBox.question(
-            self, "Datenbank zuordnen",
-            f"Die Datei\n{open_db}\nist eine Übungsdatenbank von „{program.caption}“ (keine benotete Prüfung).\n\n"
-            "Die Zuordnung gilt nur für genau diese Datei und bleibt gespeichert; bearbeitet wird sie ohne Rückfrage nur, "
-            "solange das Lernprogramm freigegeben ist.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
-        if answer != QMessageBox.StandardButton.Yes:
-            return
-        programs.assign(self.ctx.settings.security.program_assignments, open_db, program)
-        self.ctx.storage.save_settings(self.ctx.settings)
-        log.info("Datenbank %s dem Programm %s zugeordnet", open_db, program.id)
-        self.refresh_programs()
-
-    def unassign_open_database(self) -> None:
-        open_db = tecomp.open_access_database()
-        if open_db and programs.unassign(self.ctx.settings.security.program_assignments, open_db):
-            self.ctx.storage.save_settings(self.ctx.settings)
-            log.info("Zuordnung von %s aufgehoben", open_db)
-        self.refresh_programs()
-
-    def revoke_program(self) -> None:
-        program_id = self.program_combo.currentData()
-        if program_id and programs.revoke(self.ctx.settings.security.program_approvals, program_id):
-            self.ctx.storage.save_settings(self.ctx.settings)
-            log.info("Freigabe des Lernprogramms %s widerrufen", program_id)
-        self.refresh_programs()
 
     def _connected(self, _: Any = None) -> None:
         self._prepared = None
@@ -612,12 +511,6 @@ class MainWindow(QMainWindow):
                 self._cancelled()
             elif then == "none":
                 return
-            elif then == "execute" and self.mode() != "window" and task.db_path \
-                    and not self.ctx.pipeline.approval_source(task.db_path)[0]:
-                # Hintergrund ohne Freigabe: anhalten, BEVOR eine (bezahlte) KI-Anfrage gesendet wird – kein Dialog
-                reason = self.ctx.pipeline.missing_approval_hint(task.db_path)
-                self.ctx.pipeline.record_blocked(task, reason)
-                self.notify(reason)
             elif task.source.lower() != TECOMP_PROCESS:
                 # Fremdes Fenster: nichts automatisch an die KI senden – erst prüfen lassen
                 self.notify(f"te.comp wurde nicht gefunden – gelesen wurde das Fenster „{task.source}“. "
@@ -687,7 +580,8 @@ class MainWindow(QMainWindow):
 
         def work() -> PreparedTask:
             # te.comp-Übung: automatisch mit dem Access verbinden, in dem te.comp die Übung geöffnet hat
-            if captured.db_path and self.ctx.access.path.lower() != captured.db_path.lower():
+            if captured.db_path and (self.ctx.access.path.lower() != captured.db_path.lower()
+                                     or not self.ctx.access.is_alive()):
                 self.ctx.access.connect(captured.db_path, prefer_running=True)
             elif not captured.db_path and captured.source.lower() == TECOMP_PROCESS and self.ctx.access.is_connected:
                 # te.comp-Aufgabe ohne geöffnete Datenbank: die Verbindung zu einer FRÜHEREN Übung darf nicht
@@ -799,11 +693,6 @@ class MainWindow(QMainWindow):
                                 "Löschende Schritte werden einzeln nachgefragt.", objectName="muted", wordWrap=True))
         practice = QCheckBox("Ich bestätige: Das ist eine Übungsdatenbank und keine benotete Prüfung.")
         layout.addWidget(practice)
-        trust = QCheckBox("Diese eigene Übungsdatenbank merken: künftige nicht löschende Pläne ohne erneute Freigabe "
-                          "(widerrufbar in den Einstellungen)")
-        trust.setEnabled(False)
-        practice.toggled.connect(trust.setEnabled)  # nur zusammen mit der Übungs-Bestätigung
-        layout.addWidget(trust)
         buttons = QDialogButtonBox()
         ok = buttons.addButton("Freigeben und ausführen", QDialogButtonBox.ButtonRole.AcceptRole)
         buttons.addButton("Abbrechen", QDialogButtonBox.ButtonRole.RejectRole)
@@ -814,8 +703,7 @@ class MainWindow(QMainWindow):
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)
         approved = self._exec_dialog(dialog) == QDialog.DialogCode.Accepted
-        return ApprovalDecision(approved=approved, practice_confirmed=practice.isChecked(),
-                                trust=approved and practice.isChecked() and trust.isChecked())
+        return ApprovalDecision(approved=approved, practice_confirmed=practice.isChecked())
 
     # ------------------------------------------------------------------ KI-Assistent
     def _build_chat(self, layout: QVBoxLayout) -> None:
@@ -1078,17 +966,6 @@ class MainWindow(QMainWindow):
         box.addWidget(self.set_key_state)
         left = QVBoxLayout()
         left.addWidget(frame)
-        frame, box = card("Freigegebene Übungsdatenbanken")
-        box.addWidget(QLabel("Für diese eigenen Übungsdatenbanken gelten nicht löschende Pläne ohne erneute Freigabe "
-                             "(Sicherung vorher, Prüfungsschutz aktiv). Löschende Schritte und Massenänderungen werden "
-                             "weiterhin einzeln bestätigt. Hinzufügen im Freigabedialog.", objectName="muted", wordWrap=True))
-        self.set_trusted = QListWidget()
-        self.set_trusted.setAccessibleName("Freigegebene Übungsdatenbanken")
-        self.set_trusted.addItems(s.security.trusted_databases)
-        self.set_trusted.setMaximumHeight(110)
-        box.addWidget(self.set_trusted)
-        box.addWidget(button("Freigabe entfernen", self.remove_trusted))
-        left.addWidget(frame)
         columns.addLayout(left)
 
         frame, box = card("Tastenkürzel, Sicherheit und Darstellung")
@@ -1254,19 +1131,6 @@ class MainWindow(QMainWindow):
         self.refresh_dashboard()
         if self._hotkey_errors:
             self.show_error(HotkeyError("Gespeichert, aber: " + " ".join(self._hotkey_errors.values())))
-
-    def remove_trusted(self) -> None:
-        item = self.set_trusted.currentItem()
-        if item is None:
-            return
-        trusted = self.ctx.settings.security.trusted_databases
-        self.ctx.settings.security.trusted_databases = [p for p in trusted if p != item.text()]
-        self.ctx.save_settings()
-        self.set_trusted.takeItem(self.set_trusted.row(item))
-
-    def _refresh_settings_page(self) -> None:
-        self.set_trusted.clear()  # die Pipeline kann Freigaben hinzugefügt haben
-        self.set_trusted.addItems(self.ctx.settings.security.trusted_databases)
 
     # ------------------------------------------------------------------ Ende
     def closeEvent(self, event: Any) -> None:

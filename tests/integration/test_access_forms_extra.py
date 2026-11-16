@@ -136,7 +136,8 @@ def test_report_sections_filter_sort_new_page_and_calculated_controls(engine: Ac
     assert info.group_levels[0].new_page and info.group_levels[0].keep_together
     page = info.properties.pop("Seite")
     assert page.startswith("A4 hoch, Ränder"), page
-    assert info.properties == {"Filter": "[Newsletter]=True", "OrderBy": "[Nachname]", "Detailbereich": "ausgeblendet"}
+    assert {k: v for k, v in info.properties.items() if k != "Bereichsfarben"} == {
+        "Filter": "[Newsletter]=True", "OrderBy": "[Nachname]", "Detailbereich": "ausgeblendet"}
     sources = {ctl.control_source for ctl in info.controls}
     assert '=Count(*) & " Kunden"' in sources and "=Now()" in sources
     assert any(ctl.control_type == c.AC_LINE for ctl in info.controls)
