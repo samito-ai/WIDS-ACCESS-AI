@@ -1348,3 +1348,53 @@ def test_access_lock_is_not_sent_to_ai_repair(make: Any, monkeypatch: pytest.Mon
     assert outcome.status == "fehlgeschlagen"
     assert len(h.provider.requests) == 1, "nur die Analyse – keine KI-Reparatur"
     assert any("Keine KI-Korrektur" in e.message for e in interaction.events)
+
+
+# --------------------------------------------------------------------------- Autonom in autorisierten Übungen
+GOLF_AUTO = [
+    {"title": "Datensatz ergänzen", "action": {"action": "insert_records", "table": "Kunden",
+                                               "records": [{"Nachname": "Neuzugang", "Ort": "Bruchsal"}]}},
+    {"title": "Bestellungen mit Menge 0 löschen", "action": {"action": "delete_records", "table": "Bestellungen",
+                                                           "where": "Menge = 0"}},
+    {"title": "Abfrage Bruchsal", "action": {"action": "create_query", "name": "qryBruchsal",
+                                             "sql": "SELECT Nachname FROM Kunden WHERE Ort='Bruchsal'"}},
+]
+
+
+def _practice(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.vision import tecomp
+
+    monkeypatch.setattr(tecomp, "in_tecomp_workdir", lambda path: True)  # wie eine te.comp-Übung im Arbeitsordner
+
+
+def test_practice_database_runs_clear_deletion_autonomously_and_reruns_without_duplicates(
+        make: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Alt+W → alles bearbeiten → prüfen → fertig: in einer autorisierten Übung mit Sicherung läuft eine eindeutige
+    Löschung ohne Rückfrage; ein erneuter Start fügt nichts doppelt ein und meldet dennoch nur Nachgewiesenes."""
+    _practice(monkeypatch)
+    h = make([solution(GOLF_AUTO, task_type="data_editing"), solution(GOLF_AUTO, task_type="data_editing")])
+    h.access.run(lambda e: e.tables.insert_records("Bestellungen", [{"KundenNr": 1, "ArtikelNr": 1, "Menge": 0}]))
+    background = AutoInteraction(interactive=False)
+    text = "Ergänzen Sie den Kunden, löschen Sie die Bestellungen ohne Menge, erstellen Sie qryBruchsal."
+    _, first, _ = run(h, text, background)
+    assert first.status == "erfolgreich", first.error
+    assert h.access.run(lambda e: e.tables.count_records("Bestellungen", "Menge = 0")) == 0, "Löschung lief"
+    assert background.requests == [] and background.confirmations == [], "keine Rückfrage"
+    assert Path(first.backup_path).is_file(), "Sicherung vor der Löschung"
+    kunden = h.access.run(lambda e: e.tables.count_records("Kunden"))
+    h.access.run(lambda e: e.queries.delete_query("qryBruchsal"))  # Teil fehlt wieder → erneuter Start
+    _, second, _ = run(h, text, background)
+    assert h.access.run(lambda e: e.tables.count_records("Kunden")) == kunden, "nichts doppelt eingefügt"
+    assert "Bereits in Aufgabe" in second.results[0].message
+    assert second.status == "erfolgreich", second.error
+    assert h.access.run(lambda e: e.queries.exists("qryBruchsal"))
+
+
+def test_practice_database_still_holds_unbounded_deletion(make: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    _practice(monkeypatch)
+    steps = [{"title": "Alles löschen", "action": {"action": "delete_records", "table": "Bestellungen"}},
+             {"title": "Abfrage", "action": {"action": "create_query", "name": "qryOrte", "sql": "SELECT Ort FROM Kunden"}}]
+    h = make([solution(steps, task_type="data_editing")])
+    before = h.access.run(lambda e: e.tables.count_records("Bestellungen"))
+    _, outcome, _ = run(h, "Löschen Sie alle Bestellungen und erstellen Sie qryOrte.", AutoInteraction(interactive=False))
+    assert outcome.status == "teilweise" and h.access.run(lambda e: e.tables.count_records("Bestellungen")) == before

@@ -7,6 +7,7 @@ import threading
 import time
 from collections.abc import Callable
 from functools import partial
+from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, Field
@@ -148,6 +149,13 @@ def _held_by(action: Any, held: dict[str, int], tables: list[str]) -> int | None
     return next((held[t] for t in sorted(_tables_in(action, tables)) if t in held), None)
 
 
+def _fingerprint(step: m.PlanStep) -> str:
+    """Eindeutiger Abdruck einer Aktion (Typ, Ziel, Werte) – erkennt bereits ausgeführte Datenschritte."""
+    import hashlib
+
+    return hashlib.sha256(step.action.model_dump_json().encode("utf-8")).hexdigest()[:24]
+
+
 def _can_ask(interaction: Any) -> bool:
     """Darf jetzt ein Dialog erscheinen? Im Hintergrundbetrieb (Dashboard geschlossen) nicht."""
     can_ask = getattr(interaction, "can_ask", None)
@@ -224,6 +232,7 @@ class TaskPipeline:
         #: liefert (Fenstertitel, Prozessnamen) für den Prüfungsschutz; in Tests austauschbar
         self._environment_probe = environment_probe
         self._sleep = sleep
+        self._auto_steps: set[int] = set()
 
     def _reverify_touched(self, steps: list[m.PlanStep], results: list[StepResult]) -> list[Verification]:
         by_id = {r.step_id: r for r in results}
@@ -493,7 +502,12 @@ class TaskPipeline:
             validation=prepared.validation,
             warnings=prepared.warnings,
         )
-        destructive = [s for s in solution.plan.steps if self._risk(s) == "destructive"]
+        self._auto_steps = {s.id for s in solution.plan.steps
+                            if self._risk(s) == "destructive" and self._auto_allowed(s, db_path)}
+        if self._auto_steps:
+            event("log", f"{len(self._auto_steps)} löschende(r) Schritt(e) laufen automatisch: autorisierte Übungsdatenbank, "
+                         "eindeutiges Ziel, Sicherung vorher.")
+        destructive = [s for s in solution.plan.steps if self._risk(s) == "destructive" and s.id not in self._auto_steps]
         if not destructive:
             # Der Benutzer hat die Bearbeitung selbst gestartet (Alt+W bzw. Dashboard): nicht löschende Schritte ohne
             # weitere Rückfrage. Prüfungsschutz (oben) und Sicherung (unten) gelten unverändert.
@@ -527,6 +541,8 @@ class TaskPipeline:
                 )
                 backup_path = backup.backup_path
                 event("backup", "Sicherungskopie erstellt.", path=backup_path)
+                if not (Path(backup_path).is_file() and Path(backup_path).stat().st_size > 0):
+                    self._auto_steps = set()  # ohne nachweisbare Sicherung nichts automatisch löschen
             except WidsError as exc:
                 return finish("fehlgeschlagen", f"Ohne Sicherungskopie wird nichts geändert: {exc.user_message}")
 
@@ -561,6 +577,11 @@ class TaskPipeline:
                 elif check.errors:
                     result = StepResult(step_id=step.id, status="skipped",
                                         message="Übersprungen, passt nicht mehr zur Datenbank: " + check.errors[0].message)
+                elif isinstance(step.action, m.InsertRecords | m.ImportData) and (
+                        earlier := self._storage.step_done_before(db_path, _fingerprint(step), task_id)) is not None:
+                    # erneuter Start derselben Aufgabe: genau diese Daten wurden schon eingefügt – nicht doppelt
+                    result = StepResult(step_id=step.id, message=f"Bereits in Aufgabe {earlier} ausgeführt – nicht wiederholt",
+                                        details={"already_done": earlier})
                 else:
                     result = self._run_step(step, interaction, recovery, cancel, event)
                 verification: Verification | None = None
@@ -591,7 +612,7 @@ class TaskPipeline:
                         step.id,
                         passed=verification.passed,
                     )
-                event("step_done", result.message, step.id)
+                event("step_done", result.message, step.id, fingerprint=_fingerprint(step))
         except TaskCancelledError:
             self._access.invalidate_schema()
             return finish("abgebrochen", "Die Automatisierung wurde abgebrochen. Bereits ausgeführte Schritte bleiben erhalten; "
@@ -710,8 +731,12 @@ class TaskPipeline:
         options = ExecOptions(max_affected=self._policy.mass_change_threshold, replace=replace)
         state = RecoveryState()
 
-        # Destruktive Schritte: eigene Bestätigung zusätzlich zur Planfreigabe
-        if self._risk(step) == "destructive":
+        # Destruktive Schritte: eigene Bestätigung zusätzlich zur Planfreigabe – außer in autorisierten Übungen mit
+        # geprüfter Sicherung und eindeutigem Ziel (dort gilt weiter die Mengengrenze, max_affected bleibt gesetzt)
+        if self._risk(step) == "destructive" and step.id in self._auto_steps:
+            event("log", "Löschender Schritt automatisch ausgeführt (Übungsdatenbank, Sicherung geprüft): "
+                         + self._impact(step)[0], step.id)
+        elif self._risk(step) == "destructive":
             if not _can_ask(interaction):
                 return StepResult(step_id=step.id, status="skipped", message=_NO_DIALOG + "löschender Schritt nicht ausgeführt.")
             reason, exact = self._impact(step)
@@ -969,6 +994,27 @@ class TaskPipeline:
             message=f"Nach Korrektur ausgeführt: {'; '.join(messages)} (ursprünglicher Fehler: {failed.message})",
             details={"repair_steps": [s.title for s in plan.steps], "original_error": failed.message},
         ), merged
+
+    def _auto_allowed(self, step: m.PlanStep, db_path: str) -> bool:
+        """Darf dieser löschende Schritt ohne Rückfrage laufen? Nur in einer autorisierten Übungsdatenbank (te.comp-
+        Übungsordner oder WIDS-Arbeitskopie), nur mit Sicherung, und bei Datensätzen nur mit Bedingung und höchstens so
+        vielen Treffern wie die Mengengrenze erlaubt. Eigene/unbekannte Dateien: weiterhin Bestätigung."""
+        from app.vision import tecomp
+
+        if not self.settings.security.always_backup:
+            return False
+        if not (tecomp.in_tecomp_workdir(db_path) or self._backups.is_working_copy(db_path)):
+            return False
+        action = step.action
+        if isinstance(action, m.DeleteRecords | m.UpdateRecords):
+            if not action.where:
+                return False  # „alle Datensätze“ ist nie eindeutig genug
+            try:
+                count = self._access.run(lambda e: e.tables.count_records(action.table, action.where))
+            except WidsError:
+                return False
+            return count <= self._policy.mass_change_threshold
+        return True
 
     def _impact(self, step: m.PlanStep) -> tuple[str, bool]:
         """Beschreibt die Auswirkung eines destruktiven Schritts; ``True``, wenn die Anzahl exakt ist."""

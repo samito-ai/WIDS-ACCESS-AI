@@ -778,6 +778,8 @@ class ResultVerifier:
     def _verify_insert_records(self, e: AccessEngine, a: m.InsertRecords, r: StepResult, v: Verification) -> None:
         before = int(r.details.get("count_before", -1))
         after = e.tables.count_records(a.table)
+        if r.details.get("already_done"):  # erneuter Start: nichts eingefügt – die Daten müssen aber da sein
+            before = -1
         if before >= 0:
             v.add("Datensatzanzahl gestiegen", after == before + len(a.records), f"{before} → {after}")
         # Stichprobe: der erste Datensatz ist mit seinen einfachen Werten auffindbar
