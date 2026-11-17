@@ -121,7 +121,24 @@ def _data_target(step: m.PlanStep) -> str:
     return step.action.target().split(" → ")[-1].split(".")[0].strip().lower()
 
 
+#: Fehler des Zugriffs (nicht des Plans) – keine KI-Ersatzschritte
+_ACCESS_PROBLEMS = {"DatabaseLockedError", "AccessBusyError", "AccessTimeoutError", "AccessNotRunningError",
+                    "DatabaseReadOnlyError", "DatabaseNotFoundError"}
 _NO_DIALOG = "Wartet auf Bestätigung (Hintergrundbetrieb, keine Rückfrage möglich – im Dashboard erneut starten): "
+
+
+def _object_key(action: Any) -> tuple[str, str]:
+    """(Objektart, Name) eines Schritts – Tabelle „Golfclubs“ und Formular „Golfclubs“ sind verschiedene Objekte."""
+    kind = getattr(action, "object_type", "") or next(
+        (k for k in ("form", "report", "query") if k in action.action), "table")
+    return kind, action.target().lower().split(".")[0]
+
+
+def _builds_on_deletion(action: Any) -> bool:
+    """Setzt dieser Schritt eine Löschung am selben Objekt voraus? Ja, wenn er dort Datensätze hinzufügt bzw. das Objekt
+    neu anlegt (sonst doppelte Daten/Konflikte). Filter, Formatierungen, Änderungen anderer Datensätze: nein."""
+    return isinstance(action, m.InsertRecords | m.ImportData | m.RunActionQuery) or action.action.startswith(
+        ("create_", "copy_"))
 
 
 def _can_ask(interaction: Any) -> bool:
@@ -521,7 +538,7 @@ class TaskPipeline:
             before = self._access.schema(refresh=True, detailed_objects=needs_detail)
             #: Objekt → Schritt einer NICHT ausgeführten Löschung: spätere Schritte am selben Objekt setzen sie voraus
             #: (z. B. „alle löschen, dann neu importieren“ ergäbe sonst doppelte Datensätze)
-            held: dict[str, int] = {}
+            held: dict[tuple[str, str], int] = {}
             for step in solution.plan.steps:
                 if cancel.is_set():
                     raise TaskCancelledError()
@@ -529,8 +546,8 @@ class TaskPipeline:
                 # Gegen den TATSÄCHLICHEN Zustand prüfen: verhindert Folgefehler nach einem gescheiterten Schritt
                 current = self._access.schema(refresh=True)
                 check = self._validator.validate(m.ExecutionPlan.model_construct(steps=[step], notes=[]), current)
-                target = step.action.target().lower().split(".")[0]
-                if target in held:
+                target = _object_key(step.action)
+                if target in held and _builds_on_deletion(step.action):
                     result = StepResult(step_id=step.id, status="skipped", message=(
                         f"Übersprungen: setzt die nicht ausgeführte Löschung in Schritt {held[target]} voraus"))
                 elif check.errors:
@@ -902,6 +919,10 @@ class TaskPipeline:
         Ausführung Änderungen doppelt anlegen.
         """
         if not self._analyzer.available:
+            return None
+        if failed.error_type in _ACCESS_PROBLEMS:
+            # Sperre/Verbindung: ein anderer Lösungsweg der KI ändert daran nichts – kostet nur Zeit und Geld
+            event("log", "Keine KI-Korrektur: Ursache ist der Datenbankzugriff, nicht der Lösungsweg.", step.id)
             return None
         self._access.invalidate_schema()
         current = self._access.schema(refresh=True)

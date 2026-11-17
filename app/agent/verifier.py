@@ -615,9 +615,12 @@ class ResultVerifier:
                       bool(getattr(found, "linked", False)) == (a.direction == "link"))
 
     def _verify_answer_query(self, e: AccessEngine, a: m.AnswerQuery, r: StepResult, v: Verification) -> None:
-        columns, rows = e.queries.run_select_isolated(a.sql, limit=200)
+        columns, rows, isolated = e.queries.run_select_readonly(a.sql, limit=200)
         answer = m.answer_summary(columns, rows)
         v.add("Antwort erneut ermittelt", answer == r.details.get("answer"), answer[:200])
+        if not isolated:  # ehrlich: die Nachprüfung lief über dieselbe Verbindung wie die Ausführung
+            v.add("Nachprüfung über eigene Verbindung", False, "Datei exklusiv geöffnet – über die bestehende "
+                  "Verbindung erneut gelesen (gleiche Datenquelle, keine unabhängige Zweitverbindung)", critical=False)
         v.info.update({"columns": columns, "sample_rows": rows[:10], "row_count": len(rows)})
 
     def _verify_calculate_value(self, e: AccessEngine, a: m.CalculateValue, r: StepResult, v: Verification) -> None:
@@ -986,12 +989,7 @@ class ResultVerifier:
             v.add("Ergebnis wie verlangt", True, f"mehr als {_COMPARE_LIMIT} Datensätze – nicht verglichen", critical=False)
             return
         try:
-            try:
-                _, wanted = e.queries.run_select_isolated(requested, limit=_COMPARE_LIMIT + 1)
-            except WidsError:
-                # Datei exklusiv von Access geöffnet: dieselbe lesende Abfrage (nur SELECT) über die bestehende
-                # Verbindung – nicht riskanter als das Ausführen der gespeicherten Abfrage oben
-                _, wanted = e.queries.run_select_sql(requested, limit=_COMPARE_LIMIT + 1)
+            _, wanted, _ = e.queries.run_select_readonly(requested, limit=_COMPARE_LIMIT + 1)
         except WidsError as exc:
             v.add("Verlangtes Ergebnis vergleichbar", False, f"verlangtes SQL nicht ausführbar: {exc.user_message}",
                   critical=False)

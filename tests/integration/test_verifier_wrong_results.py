@@ -48,10 +48,12 @@ def test_result_comparison_still_runs_when_database_is_opened_exclusively(engine
                                                                          monkeypatch: pytest.MonkeyPatch) -> None:
     """Beta-3-Live-Fund: ist die Datei exklusiv geöffnet, scheitert die zweite DAO-Verbindung – der Vergleich darf
     trotzdem nicht entfallen (Rückfall auf die bestehende Verbindung), eine falsche Bedingung fällt weiter auf."""
+    from app.access.queries import _OpenFailed
     from app.core.errors import AccessError
 
-    def locked(*a: Any, **k: Any) -> Any:
-        raise AccessError("Die Datenbank wurde in einen Status versetzt, in dem sie nicht geöffnet werden kann.")
+    def locked(*a: Any, _open_only_errors: bool = False, **k: Any) -> Any:  # wie die echte Methode: Öffnen scheitert
+        message = "Die Datenbank wurde in einen Status versetzt, in dem sie nicht geöffnet werden kann."
+        raise _OpenFailed(message) if _open_only_errors else AccessError(message)
 
     monkeypatch.setattr(engine.queries, "run_select_isolated", locked)
     step = _step({"action": "create_query", "name": "qryTirol", "spec": {"tables": ["Kunden"], "fields": [

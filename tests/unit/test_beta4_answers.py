@@ -53,3 +53,29 @@ def test_answer_issues_block_unbacked_answers() -> None:
 
 def test_practical_task_without_changes_is_not_treated_as_a_question() -> None:
     assert m.answer_issues(m.TaskAnalysis.model_validate({"task_type": "select_query"})) == []
+
+
+def test_dependency_key_separates_object_kinds_and_only_real_dependencies_wait() -> None:
+    """Live-Fund 17.11.: Formularfilter „Golfclubs“ wartete auf die Löschung in der TABELLE „Golfclubs“."""
+    from app.agent.orchestrator import _builds_on_deletion, _object_key
+
+    def action(spec: dict[str, object]) -> object:
+        return m.PlanStep.model_validate({"id": 1, "title": "t", "action": spec}).action
+
+    delete = action({"action": "delete_records", "table": "Golfclubs", "where": "ID=1"})
+    form_filter = action({"action": "modify_form", "name": "Golfclubs", "changes": {
+        "properties": {"Filter": "[Bundesland]=\"Baden-Württemberg\"", "FilterOn": True}}})
+    insert = action({"action": "insert_records", "table": "Golfclubs", "records": [{"Golfplatz": "Neu"}]})
+    update = action({"action": "update_records", "table": "Golfclubs", "values": {"Ort": "X"}, "where": "ID=2"})
+    assert _object_key(delete) == ("table", "golfclubs") != _object_key(form_filter) == ("form", "golfclubs")
+    assert _builds_on_deletion(insert) and not _builds_on_deletion(update) and not _builds_on_deletion(form_filter)
+
+
+def test_record_values_are_not_reported_as_missing_objects() -> None:
+    from app.access.models import DatabaseSchema, FormInfo, TableInfo
+    from app.agent.diff import missing_named_objects
+
+    schema = DatabaseSchema(path="x", name="x", tables=[TableInfo(name="Golfclubs")], forms=[FormInfo(name="Golfclubs")])
+    text = ("Ergänzen Sie den Datensatz „Golfclub Bruchsal“, löschen Sie „Golfclub Neckartal“ und filtern Sie das "
+            "Formular „Golfclubs“ nach „Baden-Württemberg“. Erstellen Sie den Bericht „rptClubs“.")
+    assert missing_named_objects(text, schema) == ["rptClubs"], "nur echte, fehlende Objekte"

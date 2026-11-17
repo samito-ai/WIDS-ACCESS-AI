@@ -92,7 +92,20 @@ def missing_named_objects(task_text: str, schema: DatabaseSchema) -> list[str]:
     te.comp nennt Objektnamen in Anführungszeichen. Ein fehlender Name ist ein starkes Indiz für eine
     nicht erledigte Teilaufgabe – kann aber auch ein Wert (z. B. "Tirol") sein; daher nur ein Hinweis.
     """
-    names = {n.strip() for n in re.findall(r'[„"“]\s*([^"„“”\n]{2,64}?)\s*[“”"]', task_text)}
+    # nur Namen mit einem Objektwort davor („Formular „Kunden““, „die Abfragen unter "A" und „B““) samt den mit
+    # und/sowie/oder/Komma angehängten – Werte wie Ortsnamen, Datensätze („Golfclub Bruchsal“) oder Filterwerte
+    # („… nach „Baden-Württemberg““) sind keine Objekte (Live-Fund 17.11.)
+    quoted = r'[„"“]\s*([^"„“”\n]{2,64}?)\s*[“”"]'
+    head = re.compile(r'(?i)\b(?:tabelle|abfrage|formular|unterformular|bericht|feld|felder|steuerelement|makro|modul|'
+                      r'navigationsformular|kreuztabelle|datenblatt)\w*\s+(?:\w+\s+){0,2}' + quoted)
+    chain = re.compile(r'\s*(?:,|\bund\b|\bsowie\b|\boder\b)\s*' + quoted)
+    names: set[str] = set()
+    for match in head.finditer(task_text):
+        names.add(match.group(1).strip())
+        pos = match.end()
+        while (link := chain.match(task_text, pos)) is not None:
+            names.add(link.group(1).strip())
+            pos = link.end()
     existing = {t.name.lower() for t in schema.tables} | {q.name.lower() for q in schema.queries}
     existing |= {f.name.lower() for f in schema.forms} | {r.name.lower() for r in schema.reports}
     fields = {f.name.lower() for t in schema.tables for f in t.fields}

@@ -1,6 +1,6 @@
 [project]
 name = "wids-access-ai"
-version = "1.0.0b4"
+version = "1.0.0b5"
 license = { text = "MIT" }
 description = "WIDS ACCESS AI - KI-Assistent fuer Microsoft Access, te.comp-Uebungen und Datenbankaufgaben"
 readme = "README.md"

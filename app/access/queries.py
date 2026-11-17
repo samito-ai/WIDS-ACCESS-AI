@@ -20,10 +20,15 @@ from app.core.errors import (
     ObjectExistsError,
     ObjectNotFoundError,
     SqlSyntaxError,
+    WidsError,
 )
 from app.core.logging_setup import get_logger
 
 log = get_logger(__name__)
+
+
+class _OpenFailed(Exception):
+    """Die eigene Leseverbindung ließ sich nicht öffnen (z. B. Datei exklusiv geöffnet) – nicht die Abfrage selbst."""
 
 
 class SqlCheck(BaseModel):
@@ -201,7 +206,23 @@ class QueryOps:
             with contextlib.suppress(Exception):
                 temp.Close()
 
-    def run_select_isolated(self, sql: str, *, limit: int = 200) -> tuple[list[str], list[list[Any]]]:
+    def run_select_readonly(self, sql: str, *, limit: int = 200) -> tuple[list[str], list[list[Any]], bool]:
+        """Lesende Abfrage, bevorzugt über eine EIGENE, schreibgeschützte DAO-Verbindung (unabhängig, ohne VBA).
+
+        Hat Access bzw. te.comp die Datei exklusiv geöffnet (Live-Fund 17.11.: „… in einen Status versetzt, in dem sie
+        nicht geöffnet oder gesperrt werden kann“), ist eine zweite Verbindung grundsätzlich unmöglich – Wiederholen
+        hilft nicht. Dann wird über die BESTEHENDE Verbindung gelesen (weiterhin nur genau eine SELECT-Anweisung).
+        Der dritte Rückgabewert sagt, ob die Abfrage unabhängig (eigene Verbindung) lief."""
+        try:
+            columns, rows = self.run_select_isolated(sql, limit=limit, _open_only_errors=True)
+            return columns, rows, True
+        except _OpenFailed as exc:
+            log.info("Eigene Leseverbindung nicht möglich (%s) – lese über die bestehende Verbindung", exc)
+            columns, rows = self.run_select_sql(sql, limit=limit)
+            return columns, rows, False
+
+    def run_select_isolated(self, sql: str, *, limit: int = 200,
+                            _open_only_errors: bool = False) -> tuple[list[str], list[list[Any]]]:
         """Lesende Abfrage über eine EIGENE, schreibgeschützte DAO-Verbindung ohne Access: auch präpariertes SQL kann
         so weder Daten ändern noch VBA-Funktionen der Datenbank aufrufen (für Datenfragen aus KI-Plänen)."""
         from app.access.session import dao_engine
@@ -209,8 +230,13 @@ class QueryOps:
         text = ensure_single_statement(sql)
         if classify_sql(text) not in READ_ONLY_KINDS:
             raise AccessError("Hier sind nur lesende Abfragen (SELECT) erlaubt.")
-        with com_guard("Datenfrage auswerten"):
-            db = dao_engine().OpenDatabase(self._s.path, False, True)
+        try:
+            with com_guard("Datenfrage auswerten"):
+                db = dao_engine().OpenDatabase(self._s.path, False, True)
+        except WidsError as exc:
+            if _open_only_errors:
+                raise _OpenFailed(exc.user_message) from exc
+            raise
         try:
             with com_guard("Datenfrage auswerten"):
                 temp = db.CreateQueryDef("", text)

@@ -3,6 +3,24 @@
 Alle wichtigen Änderungen an WIDS ACCESS AI. Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/),
 Versionen nach [Semantic Versioning](https://semver.org/lang/de/).
 
+## [1.0.0b5] – 2026-11-17 (Patch)
+
+### Behoben (Live-Fund 17.11., Golfclubs-Übung)
+- **Lesefragen scheiterten an einer Sperre, obwohl Schreiben funktionierte:** Datenfragen und Nachprüfungen öffneten
+  eine zweite DAO-Verbindung; hat Access/te.comp die Datei exklusiv geöffnet, ist das unmöglich. Jetzt wird dann über
+  die bestehende Verbindung gelesen (nur eine SELECT-Anweisung) und im Bericht ausgewiesen, dass die Nachprüfung keine
+  unabhängige Zweitverbindung nutzen konnte. Keine Sperre wird aufgehoben, keine Lock-Datei gelöscht.
+- **Keine sinnlosen Wiederholungen/KI-Kosten bei Zugriffsfehlern:** Sperr- und Verbindungsfehler lösen keine
+  KI-Ersatzschritte mehr aus (vorher je Schritt KI-Anfrage + Ersatzschritt, insgesamt 80 s).
+- **Abhängigkeiten nach Objektart:** Der Formularfilter „Golfclubs“ wartete auf eine Löschung in der gleichnamigen
+  TABELLE. Jetzt zählen Objektart und Name, und angehalten werden nur Schritte, die auf der Löschung aufbauen
+  (Datensätze hinzufügen, importieren, Objekt neu anlegen) – Filter, Formatierungen und andere Änderungen laufen.
+- **Datensatz- und Filterwerte sind keine Objekte:** Hinweise „… existiert nicht in der Datenbank“ nur noch für
+  Namen mit Objektwort (Tabelle, Abfrage, Formular, Bericht, Feld …), nicht für „Golfclub Bruchsal“ oder
+  „Baden-Württemberg“.
+- KI-Anweisung: „zuletzt erfasster Datensatz“ nur über einen fortlaufenden Autowert, sonst als offene Frage; Werte aus
+  Abbildungen nie erfinden.
+
 ## [1.0.0b4] – 2026-11-17
 
 ### Neu

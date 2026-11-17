@@ -299,10 +299,11 @@ class AccessExecutor:
                           details={"path": str(path)})
 
     def _do_answer_query(self, e: AccessEngine, a: m.AnswerQuery, o: ExecOptions) -> StepResult:
-        columns, rows = e.queries.run_select_isolated(a.sql, limit=200)
+        columns, rows, isolated = e.queries.run_select_readonly(a.sql, limit=200)
         answer = m.answer_summary(columns, rows)
         return StepResult(step_id=0, message=f"{a.question} → {answer}",
-                          details={"answer": answer, "columns": columns, "rows": rows[:20], "row_count": len(rows)})
+                          details={"answer": answer, "columns": columns, "rows": rows[:20], "row_count": len(rows),
+                                   "isolated": isolated})
 
     def _do_calculate_value(self, e: AccessEngine, a: m.CalculateValue, o: ExecOptions) -> StepResult:
         from app.agent import calc

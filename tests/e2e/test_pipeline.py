@@ -1331,3 +1331,20 @@ def test_steps_on_the_object_of_a_held_deletion_are_not_run(make: Any) -> None:
     assert h.access.run(lambda e: e.tables.count_records("Bestellungen")) == before, "weder gelöscht noch ergänzt"
     assert "setzt die nicht ausgeführte Löschung in Schritt 1 voraus" in outcome.error
     assert h.access.run(lambda e: e.queries.exists("qryOrte")), "unabhängiger Schritt lief"
+
+
+def test_access_lock_is_not_sent_to_ai_repair(make: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Live-Fund 17.11.: eine Sperre löste KI-Ersatzschritte aus (Kosten, 80 s) – ein anderer Lösungsweg hilft nicht."""
+    from app.access.queries import QueryOps
+    from app.core.errors import DatabaseLockedError
+
+    def locked(self: Any, sql: str, *, limit: int = 200) -> Any:
+        raise DatabaseLockedError("Golfclubs.accdb")
+
+    monkeypatch.setattr(QueryOps, "run_select_readonly", locked)
+    h = make([solution([{"title": "Frage", "action": {"action": "answer_query", "question": "Wie viele?",
+                                                       "sql": "SELECT COUNT(*) FROM Kunden"}}])])
+    _, outcome, interaction = run(h, "Wie viele Kunden gibt es?")
+    assert outcome.status == "fehlgeschlagen"
+    assert len(h.provider.requests) == 1, "nur die Analyse – keine KI-Reparatur"
+    assert any("Keine KI-Korrektur" in e.message for e in interaction.events)
