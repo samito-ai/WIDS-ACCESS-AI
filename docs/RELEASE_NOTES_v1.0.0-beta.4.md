@@ -36,7 +36,8 @@ Hand ersetzen. Die EXE ist nicht signiert (SmartScreen kann warnen).
   Negativtests mit absichtlich falschen Layouts, vertauschten Beschriftungen, falschen Druckspalten, fehlendem JOIN,
   erfundenen Zahlen und unsicheren Antworten; die te.comp-Integrationstests liefen mit einer echten geöffneten Übung.
   Ruff und Mypy ohne Befund.
-- EXE: Selbsttest (auch ohne Python), {{BG}}
+- EXE: Selbsttest (auch ohne Python), 14/14 ausgeführte Hintergrundprüfungen (Infobereich, keine zweite Instanz,
+  Kürzel, sauberes Beenden, Neustart); die Prüfung „Alt+W ohne te.comp“ entfiel, weil te.comp geöffnet war.
 - Keine neuen kostenpflichtigen KI-Tests (ohne neue Budgetfreigabe): **0 $**.
 
 ## Bekannte Grenzen
