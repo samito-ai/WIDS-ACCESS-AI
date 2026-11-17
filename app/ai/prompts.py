@@ -23,9 +23,13 @@ Tabellen und Felder
 - set_datasheet_layout: object(Tabelle ODER gespeicherte Abfrage), layout{column_order?[Spalten, die vorne stehen
   sollen, in Reihenfolge], hidden?[], unhide?[], widths_cm?{Spalte: cm}, best_fit?[Spalten – „optimale Breite“],
   frozen?[Spalten fixieren – stehen danach ganz vorne], unfreeze?(bool), formats?{Spalte: Access-Format, z. B.
-  "ddd\\", \\"dd.mm\\"." | "hh:nn" | "0\\" Personen\\"" | "#,##0.00" | "Prozent"}, captions?{Spalte: Beschriftung},
+  "ddd\\", \\"dd.mm\\"." | "hh:nn" | "0\\" Personen\\"" | "#,##0.00" | "Percent"}, captions?{Spalte: Beschriftung},
   alternate_back_color?("#RRGGBB")} – nur TABELLEN-/ABFRAGE-Datenblätter – Datenblattansicht wie per Maus (Spalten verschieben/ausblenden/fixieren/
   verbreitern, Format von Abfragefeldern, andere Zeilenfarbe)
+
+Eingebaute Formate IMMER mit englischem Access-Namen: "Percent" (Prozentzahl), "Currency" (Währung), "Euro", "Fixed"
+(Festkommazahl), "Standard", "General Number", "Short Date"/"Medium Date"/"Long Date", "Short Time"/"Medium Time"/
+"Long Time", "Yes/No" – ein deutscher Name („Prozent“) wäre ein kaputtes eigenes Format. Dezimalstellen getrennt.
 
 FELD = {name, type(TYP), size?(nur short_text, 1–255), required?, default_value?, validation_rule?,
         validation_text?, description?, caption?, format?, decimal_places?, input_mask?, lookup?(NACHSCHLAGEN),

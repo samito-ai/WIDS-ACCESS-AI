@@ -82,6 +82,10 @@ def get_property(obj: Any, name: str, default: Any = "") -> Any:
 
 def set_property(obj: Any, name: str, value: Any, dao_type: int = c.DB_TEXT) -> None:
     """Setzt eine (ggf. benutzerdefinierte) DAO-Eigenschaft; leerer Wert entfernt sie."""
+    if name == "Format" and isinstance(value, str):
+        from app.access.values import canonical_format
+
+        value = canonical_format(value)
     if value is None or value == "":
         with contextlib.suppress(Exception):
             obj.Properties.Delete(name)

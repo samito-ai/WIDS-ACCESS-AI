@@ -26,6 +26,27 @@ _TRUE = {"true", "wahr", "ja", "yes", "1", "-1", "x", "on"}
 _FALSE = {"false", "falsch", "nein", "no", "0", "", "off"}
 
 
+#: Eingebaute Access-Formate heißen intern ENGLISCH – ein deutscher Name ist ein (kaputtes) eigenes Format
+#: (gemessen: Format(0,2; "Percent") = "20,00%", Format(0,2; "Prozent") = "Proze48t"; Live-Fund USt „Aktuelle Artikel“)
+NAMED_FORMATS = {
+    "allgemeine zahl": "General Number", "währung": "Currency", "euro": "Euro", "festkommazahl": "Fixed",
+    "festkomma": "Fixed", "standardzahl": "Standard", "standard": "Standard", "prozentzahl": "Percent",
+    "prozent": "Percent", "wissenschaftlich": "Scientific", "standarddatum": "General Date",
+    "datum, lang": "Long Date", "datum lang": "Long Date", "datum, mittel": "Medium Date", "datum mittel": "Medium Date",
+    "datum, kurz": "Short Date", "datum kurz": "Short Date", "zeit, lang": "Long Time", "zeit lang": "Long Time",
+    "zeit, mittel": "Medium Time", "zeit mittel": "Medium Time", "zeit, kurz": "Short Time", "zeit kurz": "Short Time",
+    "ja/nein": "Yes/No", "wahr/falsch": "True/False", "ein/aus": "On/Off",
+}
+
+
+def canonical_format(fmt: str | None) -> str | None:
+    """Deutschen Namen eines eingebauten Formats in den englischen Access-Namen übersetzen (eigene Formate wie
+    "0.0%" oder "nn:ss" bleiben unverändert)."""
+    if fmt is None:
+        return None
+    return NAMED_FORMATS.get(fmt.strip().lower(), fmt)
+
+
 def parse_datetime(value: str) -> dt.datetime:
     text = value.strip().strip("#")
     for fmt in _DATE_FORMATS:

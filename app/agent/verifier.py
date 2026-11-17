@@ -16,7 +16,7 @@ from app.access.constants import AccessType
 from app.access.engine import AccessEngine
 from app.access.naming import quote_ident, sql_literal
 from app.access.sqlbuilder import READ_ONLY_KINDS, classify_sql
-from app.access.values import default_expression, to_dao
+from app.access.values import canonical_format, default_expression, to_dao
 from app.agent.executor import StepResult
 from app.agent.planner import expected_columns
 from app.core.errors import WidsError
@@ -549,7 +549,7 @@ class ResultVerifier:
         if p.caption is not None:
             v.add("Beschriftung", info.caption == p.caption, info.caption)
         if p.format is not None:
-            v.add("Format", info.format == p.format, info.format)
+            v.add("Format", canonical_format(info.format) == canonical_format(p.format), info.format)
         if p.input_mask is not None:
             v.add("Eingabeformat", info.input_mask == p.input_mask, info.input_mask)
         if p.decimal_places is not None:
@@ -612,7 +612,8 @@ class ResultVerifier:
         for col in spec.best_fit:
             v.add(f"Optimale Breite „{col}“", int(get_property(fields[col.lower()], "ColumnWidth", -1) or -1) > 0)
         for col, fmt in spec.formats.items():
-            v.add(f"Format „{col}“", str(get_property(fields[col.lower()], "Format", "")) == fmt, fmt)
+            stored = str(get_property(fields[col.lower()], "Format", ""))
+            v.add(f"Format „{col}“", canonical_format(stored) == canonical_format(fmt), stored)
         for col, cap in spec.captions.items():
             v.add(f"Beschriftung „{col}“", str(get_property(fields[col.lower()], "Caption", "")) == cap, cap)
         if spec.alternate_back_color:

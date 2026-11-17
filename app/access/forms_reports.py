@@ -33,6 +33,7 @@ from app.access.specs import (
     TabControlSpec,
 )
 from app.access.tables import collection_has
+from app.access.values import canonical_format
 from app.core.errors import AccessError, ObjectExistsError, ObjectNotFoundError
 from app.core.logging_setup import get_logger
 
@@ -900,7 +901,7 @@ class FormReportOps:
         if ctl.font_size and ctl.type != "line":
             obj.FontSize = ctl.font_size
         if ctl.format and ctl.type == "text_box":
-            obj.Format = ctl.format
+            obj.Format = canonical_format(ctl.format)
         area = section(report, target)
         if int(area.Height) < top + height + _cm(0.1):
             area.Height = top + height + _cm(0.1)
@@ -964,7 +965,7 @@ class FormReportOps:
             box.Name = _safe_control_name(f"{prefix}{func}{total.field.strip('*') or 'Alle'}", used)
             if total.format:
                 with contextlib.suppress(Exception):
-                    box.Format = total.format
+                    box.Format = canonical_format(total.format)
             with contextlib.suppress(Exception):
                 box.FontBold = True
 
@@ -1114,7 +1115,7 @@ class FormReportOps:
                 if value is not None:
                     setattr(ctl, attr, _cm(value))
             for attr, raw in (("Caption", change.caption), ("FontBold", change.bold), ("FontItalic", change.italic),
-                              ("FontSize", change.font_size), ("Format", change.format), ("Visible", change.visible),
+                              ("FontSize", change.font_size), ("Format", canonical_format(change.format)), ("Visible", change.visible),
                               ("BorderStyle", change.border_style), ("BorderWidth", change.border_width)):
                 if raw is not None:
                     setattr(ctl, attr, raw)
