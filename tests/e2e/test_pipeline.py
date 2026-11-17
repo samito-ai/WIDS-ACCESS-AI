@@ -1013,7 +1013,7 @@ def test_diagnosis_shows_requirements_steps_checks_and_corrections(make: Any) ->
     assert "## Korrekturschritte (Selbstkorrektur)" in report and "Schritt 2: qryOrte anlegen" in report
     diagnosis = report.split("## Diagnose (Anforderung → Schritte → Prüfung)", 1)[1]
     assert "Anforderungen erkannt: 3" in diagnosis and "Korrekturschritte: 1" in diagnosis
-    assert "| 3 | Abfrage qryOrte | 1 ✅, 2 ✅ | 1: 7/7 ✓, 2: 4/4 ✓ | erfüllt" in diagnosis, diagnosis  # inkl. Ergebnisvergleich
+    assert "| 3 | Abfrage qryOrte | 1 ✅, 2 ✅ | 1: 7/7 ✓, 2: 5/5 ✓ | erfüllt" in diagnosis, diagnosis  # inkl. Ergebnisvergleich und Abfragetyp
     assert "Zyklus 1 (Ursache: KI-Plan): qryOrte anlegen: ausgeführt → danach noch offen: keine" in diagnosis
     assert outcome.corrections and h.storage.get_task(outcome.task_id).report_md == report
 

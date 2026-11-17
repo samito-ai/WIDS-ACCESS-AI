@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import shutil
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -57,6 +58,8 @@ class ProgressView:
         box.addStretch()
         self._timer = QTimer(parent, interval=1000)
         self._timer.timeout.connect(self.render)
+        #: Kostenzeile der laufenden Aufgabe (vom Hauptfenster gesetzt; leer = keine Angabe)
+        self.cost_line: Callable[[], str] = lambda: ""
 
     def finish_and_render(self, text: str, state: str) -> None:
         self.tracker.finish(text, state)
@@ -70,6 +73,8 @@ class ProgressView:
         meta = [f"Laufzeit {t.elapsed():.0f} s"]
         if t.total_steps:
             meta.append(f"erledigt {t.done_steps} · offen {max(t.total_steps - t.done_steps, 0)}")
+        if cost := self.cost_line():
+            meta.append(cost)
         if t.confirmed:
             meta.append("bestätigt: " + ", ".join(t.confirmed[-4:]) + (" …" if len(t.confirmed) > 4 else ""))
         if t.result:

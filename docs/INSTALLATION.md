@@ -63,6 +63,8 @@ Eigene EXE bauen: `python build.py` (PyInstaller, inklusive Selbsttest).
 
 ## Erste Schritte
 1. Übung in Access öffnen (te.comp-Übung, Workshop oder eigene Datenbank – der Name ist egal) und **Alt+W** drücken.
+   Bei einem te.comp-Workshop bearbeitet ein Alt+W alle Teilaufgaben; das Dashboard zeigt, wie viele erkannt und
+   nachgewiesen sind.
    Alt+W ist die Zustimmung, es gibt keine Rückfragen: eindeutige Schritte laufen nach der Sicherung automatisch,
    nicht eindeutige (z. B. „alle Datensätze löschen“) werden nur als Schritt blockiert. Statuspunkt oben links:
    gelb = arbeitet, grün = vollständig geprüft, rot = nicht abgeschlossen (Grund im Verlauf).

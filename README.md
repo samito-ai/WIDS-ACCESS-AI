@@ -1,6 +1,6 @@
 # WIDS ACCESS AI
 
-**Version 1.0.0** · Windows 10/11 · Microsoft Access · Anthropic Claude · kostenlos, Open Source ([MIT](LICENSE))
+**Version 1.1.0** · Windows 10/11 · Microsoft Access · Anthropic Claude · kostenlos, Open Source ([MIT](LICENSE))
 
 > KI-Assistent für Microsoft-Access-**Übungen**. Übung öffnen, **Alt+W** drücken: WIDS liest die Aufgabe, plant die
 > Lösung, legt eine Sicherung an, führt die Schritte in Access aus und prüft danach jede Anforderung unabhängig.
@@ -41,6 +41,7 @@
 | Daten | Datensätze einfügen, ändern und löschen, Import und Export (Excel, Text, Access) |
 | Fragen | Datenfragen per nur lesender Abfrage beantwortet und nachgeprüft, Rechenfragen exakt berechnet, Multiple Choice mit Begründung je Option |
 | Mehrteilige Aufgaben | unabhängige Teile laufen weiter, auch wenn ein einzelner Schritt blockiert ist |
+| te.comp-Workshops | **ein Alt+W für den ganzen Workshop:** WIDS liest alle Teilaufgaben aus der te.comp-Aufgabenleiste, plant sie gemeinsam in sinnvoller Reihenfolge, prüft jede einzeln und meldet „vollständig“ nur, wenn alle nachgewiesen sind |
 
 **Ohne Rückfragen, mit technischem Schutz:** Alt+W ist die Zustimmung. Eindeutige Schritte laufen automatisch nach
 der Sicherung, auch Löschungen mit klarer Bedingung (höchstens 25 Datensätze je Schritt, einstellbar) und das Löschen
@@ -58,6 +59,10 @@ Datensätze“, mehr Treffer als die Grenze, Löschweitergabe, verknüpfte Tabel
   dann nicht mehr automatisch, Änderungen mit Bedingung schon.
 - Die EXE ist nicht signiert. Windows SmartScreen kann beim ersten Start warnen.
 - Die Kosten berechnet WIDS aus Tokens und Listenpreisen. Maßgeblich ist die Abrechnung von Anthropic.
+- Workshops: Zum Lesen aller Teilaufgaben blättert WIDS kurz mit te.comps eigenen Pfeilen durch die Aufgabenleiste
+  (ohne Mausbewegung und Fokuswechsel, danach steht sie wieder wie vorher). Ein großer Workshop kostet mehr als eine
+  Einzelübung; reicht das Aufgabenbudget nicht, bricht WIDS mit Grund ab. Nicht jede Teilaufgabe wird automatisch
+  gelöst (im Test „CD-Sammlung“ 9 von 12); offene Teilaufgaben meldet WIDS mit Nummer, nie als erledigt.
 
 ## Download und Start
 

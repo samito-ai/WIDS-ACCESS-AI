@@ -12,7 +12,10 @@ import html
 import re
 import threading
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from app.core.logging_setup import get_logger
 from app.vision.capture import TECOMP_PROCESS, visible_windows
@@ -88,12 +91,12 @@ def workshop_for(db_path: str, base: Path | None = None) -> Path | None:
     return hits[0] if len(hits) == 1 else None
 
 
-def workshop_context(folder: Path, limit: int = 1500) -> str:
-    """Kurzbeschreibung des Workshops aus seinen Dateien (Einführung und Aufgabe) – Hintergrund, nicht der aktuelle
-    Arbeitsschritt (den zeigt nur das te.comp-Fenster)."""
+def workshop_context(folder: Path, limit: int = 4000) -> str:
+    """Hintergrund des Workshops aus seinen lesbaren Dateien: Einführung, Aufgabe und die Hilfeseiten („Weitere Infos“,
+    „Lösungstipp“ der Teilaufgaben) – nicht die Teilaufgaben selbst (die zeigt nur die te.comp-Aufgabenleiste)."""
     parts = []
-    for name in ("intro.html", "task.html"):
-        page = folder / "intro" / name
+    intro = folder / "intro"
+    for page in [intro / "intro.html", intro / "task.html", *sorted(intro.glob("task-*.html"))]:
         if page.is_file():
             parts.append(html_to_text(page.read_text(encoding="utf-8", errors="replace")))
     return "\n".join(p for p in parts if p)[:limit]
@@ -298,3 +301,208 @@ def open_exercise() -> tuple[str, str] | None:
     if front and in_tecomp_workdir(front[0]) and _EXERCISE_NAME.fullmatch(Path(front[0]).name):
         return front
     return None
+
+
+# ------------------------------------------------------------------ Workshop: alle Teilaufgaben auf einmal
+#: In der te.comp-Aufgabenleiste ist jede Teilaufgabe eines Workshops ein eigenes Fenster dieser Klasse. Lesbar (per
+#: OCR) sind nur die ~3 Karten im sichtbaren Ausschnitt; die übrigen erreicht te.comp über die Pfeile links und rechts
+#: der Leiste. Die Schrittliste selbst liegt nur verschlüsselt vor (WS.epp) – sie wird bewusst nicht entschlüsselt.
+STEP_CLASS = "TInstructionTab"
+_FINAL_BUTTONS = {"Prüfen", "Nächste Aufgabe", "Abschließen"}
+#: „1. Die CD-Tabelle: …“ – davor darf OCR ein Kästchen-Symbol als „o“ lesen
+_STEP_NUMBER = re.compile(r"^[^\d]{0,4}?(\d{1,2})\.\s+")
+
+
+@dataclass
+class WorkshopSteps:
+    steps: list[str]  # „1. …“, „2. …“ in te.comp-Reihenfolge
+    notes: list[str]  # Karten ohne Nummer VOR der ersten Teilaufgabe (Ausgangssituation, „Informieren Sie sich“)
+    complete: bool
+    problem: str = ""
+    restored: bool = True  # Aufgabenleiste wieder an der Ausgangsposition
+
+
+def parse_steps(cards: list[str]) -> WorkshopSteps:
+    """Karten der Aufgabenleiste → nummerierte Teilaufgaben und Hinweise. Hinweise stehen nur VOR der ersten
+    Teilaufgabe; eine Karte ohne erkennbare Nummer danach ist eine Teilaufgabe, deren Nummer die Texterkennung
+    verloren hat. Vollständig nur, wenn jede Karte lesbar war und die Nummern lückenlos bei 1 beginnen."""
+    steps: list[str] = []
+    notes: list[str] = []
+    numbers: list[int] = []
+    problem = ""
+    for raw in cards:
+        text = " ".join(raw.split())
+        if not text:
+            problem = problem or "Mindestens eine Teilaufgabe war nicht lesbar."
+        elif match := _STEP_NUMBER.match(text):
+            numbers.append(int(match.group(1)))
+            steps.append(f"{match.group(1)}. {text[match.end():]}")
+        elif steps:
+            problem = problem or f"Die Karte nach Teilaufgabe {numbers[-1]} hat keine erkennbare Nummer."
+        else:
+            notes.append(text)
+    if not steps:
+        problem = problem or "In der te.comp-Aufgabenleiste wurden keine nummerierten Teilaufgaben gefunden."
+    elif numbers != list(range(1, len(numbers) + 1)):
+        problem = problem or f"Teilaufgaben nicht lückenlos erkannt (gelesen: {', '.join(map(str, numbers))})."
+    return WorkshopSteps(steps=steps, notes=notes, complete=not problem, problem=problem)
+
+
+def _children(hwnd: int) -> list[int]:
+    import win32gui
+
+    found: list[int] = []
+
+    def collect(child: int, _: object) -> bool:
+        found.append(child)
+        return True
+
+    win32gui.EnumChildWindows(hwnd, collect, None)
+    return found
+
+
+class _StepStrip:
+    """Die echte te.comp-Aufgabenleiste. Geblättert wird mit te.comps eigenen Pfeilen – als Fensternachricht an genau
+    diese zwei Schaltflächen: keine Mausbewegung, kein Fokuswechsel, und nie „Prüfen“, „Nächste Aufgabe“ oder
+    „Abschließen“ (die Pfeile werden über ihre Lage direkt neben der Leiste bestimmt, nicht über ihre Beschriftung)."""
+
+    def __init__(self, main_hwnd: int) -> None:
+        import win32gui
+
+        self._gui = win32gui
+        children = _children(main_hwnd)
+        tabs = sorted((c for c in children if win32gui.GetClassName(c) == STEP_CLASS),
+                      key=lambda c: win32gui.GetWindowRect(c)[0])
+        if not tabs:
+            raise LookupError("keine Aufgabenleiste")
+        self._tabs = tabs
+        self._cards = [t for t in tabs if not self._has_final_buttons(t)]
+        self.left_edge, _, self.right_edge, _ = win32gui.GetWindowRect(win32gui.GetParent(tabs[0]))
+        _, top, _, bottom = win32gui.GetWindowRect(win32gui.GetParent(tabs[0]))
+        # Pfeile: sichtbare, unbeschriftete, schmale Schaltflächen auf Höhe der Leiste, direkt an ihrem Rand. Alle Maße
+        # relativ zur Leistenhöhe: je nach Bildschirmskalierung (und DPI-Modus des Prozesses) sind Pixel verschieden groß
+        unit = max(bottom - top, 1)
+        arrows = [c for c in children if win32gui.GetClassName(c) == "TAdvGlowButton" and not win32gui.GetWindowText(c)
+                  and win32gui.IsWindowVisible(c) and self._width(c) <= 0.25 * unit
+                  and abs(win32gui.GetWindowRect(c)[1] - top) <= 0.12 * unit
+                  and abs(win32gui.GetWindowRect(c)[3] - bottom) <= 0.12 * unit]
+        before = [a for a in arrows if 0 <= self.left_edge - win32gui.GetWindowRect(a)[2] <= 0.3 * unit]
+        after = [a for a in arrows if 0 <= win32gui.GetWindowRect(a)[0] - self.right_edge <= 0.3 * unit]
+        if not self._cards or len(before) != 1 or len(after) != 1:  # nicht eindeutig: lieber gar nicht klicken
+            raise LookupError("Pfeile an der Aufgabenleiste nicht eindeutig")
+        self._arrow = {-1: before[0], +1: after[0]}
+
+    def _width(self, hwnd: int) -> int:
+        left, _, right, _ = self._gui.GetWindowRect(hwnd)
+        return int(right - left)
+
+    def _height(self, hwnd: int) -> int:
+        _, top, _, bottom = self._gui.GetWindowRect(hwnd)
+        return int(bottom - top)
+
+    def _has_final_buttons(self, tab: int) -> bool:
+        return bool(_FINAL_BUTTONS & {self._gui.GetWindowText(child) for child in _children(tab)})
+
+    @property
+    def count(self) -> int:
+        return len(self._cards)
+
+    def offset(self) -> int:
+        return int(self._gui.GetWindowRect(self._tabs[0])[0])
+
+    def at_start(self) -> bool:
+        return self.offset() >= self.left_edge - 1
+
+    def at_end(self) -> bool:
+        return bool(self._gui.GetWindowRect(self._cards[-1])[2] <= self.right_edge + 1)
+
+    def visible_cards(self) -> dict[int, str]:
+        from app.vision import capture
+
+        texts: dict[int, str] = {}
+        for index, tab in enumerate(self._cards):
+            rect = tuple(self._gui.GetWindowRect(tab))
+            if rect[0] >= self.left_edge - 1 and rect[2] <= self.right_edge + 1:
+                info = capture.WindowInfo(tab, "", STEP_CLASS, TECOMP_PROCESS, rect)  # type: ignore[arg-type]
+                texts[index] = capture.ocr(capture.grab(info))
+        return texts
+
+    def click(self, direction: int) -> None:
+        import win32api
+        import win32con
+
+        arrow = self._arrow[direction]
+        point = win32api.MAKELONG(self._width(arrow) // 2, self._height(arrow) // 2)
+        for message, flags in ((win32con.WM_MOUSEMOVE, 0), (win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON),
+                               (win32con.WM_LBUTTONUP, 0)):
+            self._gui.PostMessage(arrow, message, flags, point)
+
+
+def _move(strip: Any, direction: int, wait: float, sleep: Callable[[float], None]) -> bool:
+    """Ein Pfeilklick; ``True``, sobald sich die Leiste bewegt hat und wieder stillsteht."""
+    before = strip.offset()
+    strip.click(direction)
+    waited = 0.0
+    while strip.offset() == before:
+        if waited >= wait:
+            return False
+        sleep(0.1)
+        waited += 0.1
+    last = strip.offset()
+    for _ in range(int(wait / 0.15)):  # eine eventuelle Gleitbewegung abwarten
+        sleep(0.15)
+        if strip.offset() == last:
+            break
+        last = strip.offset()
+    return True
+
+
+def read_strip(strip: Any, wait: float = 3.0,
+               sleep: Callable[[float], None] = time.sleep) -> tuple[dict[int, str], bool, str]:
+    """Liest jede Karte der Leiste: zuerst ganz nach links, dann Schritt für Schritt nach rechts. Danach steht die Leiste
+    wieder genau dort, wo der Benutzer sie hatte. Ergebnis: (Index → Text, wiederhergestellt?, Problem)."""
+    start = strip.offset()
+    cards: dict[int, str] = {}
+    problem = ""
+    limit = strip.count + 3
+    try:
+        for _ in range(limit):
+            if strip.at_start() or not _move(strip, -1, wait, sleep):
+                break
+        for _ in range(limit):
+            cards.update({i: t for i, t in strip.visible_cards().items() if i not in cards})
+            if strip.at_end() or len(cards) >= strip.count:
+                break
+            if not _move(strip, +1, wait, sleep):
+                problem = "Die te.comp-Aufgabenleiste ließ sich nicht weiterblättern."
+                break
+    finally:
+        for _ in range(2 * limit):
+            if strip.offset() == start:
+                break
+            if not _move(strip, -1 if strip.offset() < start else +1, wait, sleep):
+                break
+    if len(cards) < strip.count:
+        problem = problem or f"Nur {len(cards)} von {strip.count} Teilaufgaben-Karten lesbar."
+    return cards, strip.offset() == start, problem
+
+
+def workshop_steps(wait: float = 3.0) -> WorkshopSteps | None:
+    """Alle Teilaufgaben des in te.comp geöffneten Workshops – ``None``, wenn keine te.comp-Aufgabenleiste da ist."""
+    main = next((w for w in visible_windows() if w.process.lower() == TECOMP_PROCESS and w.cls == "TForm_Main"), None)
+    if main is None:
+        return None
+    try:
+        strip = _StepStrip(main.hwnd)
+    except LookupError as exc:
+        log.info("Workshop-Aufgabenleiste nicht erkannt: %s", exc)
+        return None
+    cards, restored, problem = read_strip(strip, wait)
+    if not restored:
+        log.warning("te.comp-Aufgabenleiste steht nach dem Lesen nicht mehr an der Ausgangsposition")
+    result = parse_steps([cards.get(i, "") for i in range(strip.count)])
+    result.restored = restored
+    if problem:
+        result.complete, result.problem = False, problem
+    log.info("Workshop gelesen: %d Teilaufgaben, vollständig=%s", len(result.steps), result.complete)
+    return result

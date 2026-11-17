@@ -341,6 +341,75 @@ def records_present(engine: AccessEngine, table: str, records: list[dict[str, An
     return not missing_records(engine, table, records)
 
 
+_SET_CLAUSE = re.compile(r"^\s*UPDATE\s+(\[[^\]]+\]|[^\s\[\]]+)(.*?)\bSET\b(.*?)(?:\bWHERE\b(.*?))?;?\s*$",
+                         re.IGNORECASE | re.DOTALL)
+_ALIAS = re.compile(r"(\[[^\]]+\]|[^\s\[\](),]+)\s+AS\s+(\[[^\]]+\]|[^\s\[\](),]+)", re.IGNORECASE)
+
+
+def _updated_fields(sql: str) -> list[tuple[str, str, str]]:
+    """(Tabelle, Feld, WHERE-Bedingung) jeder Zuweisung „SET Feld = Ausdruck“ einer UPDATE-Abfrage – außer „= Null“.
+    Tabellen-Aliase („CDs AS c“) werden aufgelöst."""
+    found = _SET_CLAUSE.match(sql or "")
+    if found is None:
+        return []
+    target = found.group(1).strip("[]")
+    aliases = {a.strip("[]").lower(): t.strip("[]") for t, a in _ALIAS.findall(found.group(1) + found.group(2))}
+    where = (found.group(4) or "").strip()
+    for alias in aliases:  # „c.Nr < 5“ → „Nr < 5“ (gezählt wird direkt in der Tabelle)
+        where = re.sub(rf"(?i)(?<![\w\]])\[?{re.escape(alias)}\]?\.", "", where)
+    parts, depth, quote, current = [], 0, "", ""
+    for char in found.group(3):  # an Kommas außerhalb von Klammern und Texten trennen
+        if quote:
+            quote = "" if char == quote else quote
+        elif char in "'\"":
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif char == "," and depth == 0:
+            parts.append(current)
+            current = ""
+            continue
+        current += char
+    parts.append(current)
+    fields = []
+    for part in parts:
+        left, sep, right = part.partition("=")
+        if not sep or right.strip().lower() == "null":
+            continue
+        names = [n.strip("[] ") for n in re.findall(r"\[[^\]]+\]|[^.\s\[\]]+", left.strip())]
+        if names:
+            table = names[-2] if len(names) > 1 else target
+            fields.append((aliases.get(table.lower(), table), names[-1], where))
+    return fields
+
+
+def _fills(value: Any) -> bool:
+    """Ein berechneter Wert („=Ausdruck“), der das Feld befüllen soll – „=Null“ leert absichtlich."""
+    return isinstance(value, str) and value.startswith("=") and value[1:].strip().lower() != "null"
+
+
+def _check_filled(e: AccessEngine, table: str, field_name: str, affected: int, v: Verification,
+                  scope: str = "") -> None:
+    """Live-Fund CD-Sammlung: „33 Datensätze geändert“, aber der berechnete Wert (DLookUp ohne Treffer) war überall
+    leer. Wer ein Feld befüllt, muss danach in den betroffenen Datensätzen (``scope``) Werte darin haben – sonst ist der
+    Schritt nicht bestätigt. Lässt sich das nicht lesen, gilt es ebenfalls als nicht bestätigt."""
+    if affected <= 0:
+        return
+    name = f"{field_name} enthält danach Werte"
+    filled_condition = f"{quote_ident(field_name)} Is Not Null"
+    try:
+        if scope and e.tables.count_records(table, scope) == 0:
+            scope = ""  # die Bedingung betraf das Zielfeld selbst (z. B. „… Is Null“) – dann über die ganze Tabelle
+        filled = e.tables.count_records(table, f"({scope}) AND {filled_condition}" if scope else filled_condition)
+    except WidsError as exc:
+        v.add(name, False, f"nicht prüfbar: {exc.user_message}")
+        return
+    v.add(name, filled > 0, f"{filled} Datensätze mit Wert" if filled
+          else f"„{field_name}“ ist nach der Änderung in den betroffenen Datensätzen leer")
+
+
 class ResultVerifier:
     _schema: Any = None
 
@@ -843,6 +912,8 @@ class ResultVerifier:
         scope = e.tables.count_records(a.table, a.where) if a.where else e.tables.count_records(a.table)
         for key, value in a.values.items():
             info = schema_table.field(key) if schema_table else None
+            if info is not None and _fills(value):
+                _check_filled(e, a.table, info.name, affected, v, scope=a.where or "")
             if info is None or (isinstance(value, str) and value.startswith("=")):
                 continue
             if info.type in (AccessType.SINGLE, AccessType.DOUBLE, AccessType.LONG_TEXT):
@@ -874,6 +945,13 @@ class ResultVerifier:
                 continue
             if isinstance(value, str) and value.startswith("="):
                 v.add(f"{name}: Ausdruck nicht einzeln nachprüfbar", True, value, critical=False)
+                if _fills(value):
+                    filled = sum(e.tables.count_records(a.table, f"{quote_ident(key)} In ({chunk}) AND "
+                                                                 f"{quote_ident(info.name)} Is Not Null")
+                                 for chunk in (", ".join(sql_literal(to_dao(k, key_info.type, key))
+                                                         for k in keys[i:i + 200]) for i in range(0, len(keys), 200)))
+                    v.add(f"{info.name} enthält danach Werte", filled > 0,
+                          f"{filled} von {len(keys)} betroffenen Datensätzen mit Wert")
                 continue
             if value is None:
                 condition = f"{quote_ident(info.name)} Is Null"
@@ -967,8 +1045,10 @@ class ResultVerifier:
         if not check.ok:
             return
         kind = classify_sql(stored_sql)
-        if a.spec is not None:
-            expected_kind = "select" if a.spec.kind == "select" else a.spec.kind
+        # auch bei reinem SQL: eine gleichnamige Aktionsabfrage ist nie die verlangte Auswahlabfrage (und umgekehrt)
+        expected_kind = (("select" if a.spec.kind == "select" else a.spec.kind) if a.spec is not None
+                         else classify_sql(a.sql) if a.sql else "")
+        if expected_kind:
             v.add("Abfragetyp", kind == expected_kind, kind)
         declared = {p.name.lower() for p in a.spec.parameters} if a.spec else set()
         prompts: set[str] = set()
@@ -1074,6 +1154,9 @@ class ResultVerifier:
         affected = int(r.details.get("affected", -1))
         v.add("Aktionsabfrage ausgeführt", affected >= 0, f"{affected} Datensätze betroffen")
         v.add("Mindestens ein Datensatz betroffen", affected > 0, critical=False)
+        sql = a.sql or (e.queries.get_sql(a.name) if a.name and e.queries.exists(a.name) else "")
+        for table, field_name, where in _updated_fields(sql):
+            _check_filled(e, table, field_name, affected, v, scope=where)
 
     # ------------------------------------------------------------------ Formulare / Berichte
     def _verify_create_form(self, e: AccessEngine, a: m.CreateForm, r: StepResult, v: Verification) -> None:

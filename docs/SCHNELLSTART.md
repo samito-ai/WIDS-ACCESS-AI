@@ -28,7 +28,8 @@ Benutzerkonto, keine Nutzungslimits und keine versteckten Gebühren**. Kosten en
 
 ## 4. Benutzen
 1. Übung in te.comp bzw. Access öffnen (der Dateiname ist egal).
-2. **Alt+W** drücken. WIDS arbeitet im Hintergrund, ohne Fenster und ohne Pop-ups.
+2. **Alt+W** drücken. WIDS arbeitet im Hintergrund, ohne Fenster und ohne Pop-ups. Bei einem Workshop bearbeitet
+   ein Alt+W alle Teilaufgaben auf einmal.
 3. Der kleine Punkt ganz oben links zeigt den Stand: **gelb** = arbeitet, **grün** = fertig und geprüft,
    **rot** = nicht abgeschlossen oder angehalten.
 4. Details, Bericht und Sicherung: Rechtsklick auf das WIDS-Symbol unten rechts → **Dashboard** → **Verlauf**.

@@ -165,6 +165,66 @@ def _held_by(action: Any, held: dict[str, int], tables: list[str], queries: dict
     return next((held[t] for t in sorted(_tables_in(action, tables, queries)) if t in held), None)
 
 
+WORKSHOP_DONE = "Workshop vollständig abgeschlossen"
+_SUBTASK = re.compile(r"^\s*\[(\d{1,2})\]")
+
+
+def workshop_summary(task: m.CapturedTask, requirements: list[str],
+                     report: m.RequirementReport | None) -> tuple[int, str]:
+    """(nachgewiesene Teilaufgaben, Zusammenfassung) eines te.comp-Workshops. Eine Teilaufgabe ist nachgewiesen, wenn
+    sie mindestens eine Anforderung „[n] …“ hat und JEDE davon in der Prüfung erfüllt ist. Vollständig abgeschlossen
+    ist der Workshop nur, wenn das für alle erfassten Teilaufgaben gilt UND alle Teilaufgaben erfasst wurden."""
+    total = task.workshop_steps
+    if not total:
+        return 0, "Workshop nicht vollständig erfassbar – nur die sichtbare Teilaufgabe wurde bearbeitet."
+    status = {r.number: r.status for r in (report.results if report else [])}
+    per: dict[int, list[str]] = {}
+    for number, text in enumerate(requirements, 1):
+        if found := _SUBTASK.match(text):
+            per.setdefault(int(found.group(1)), []).append(status.get(number, "unklar"))
+    proven = [n for n in range(1, total + 1) if per.get(n) and all(s == "erfüllt" for s in per[n])]
+    parts = [f"{len(proven)} von {total} Teilaufgaben nachgewiesen"]
+    if uncovered := [n for n in range(1, total + 1) if n not in per]:
+        parts.append("ohne Anforderung im Plan: " + ", ".join(map(str, uncovered)))
+    if unproven := [n for n in per if n not in proven and n <= total]:
+        parts.append("nicht nachgewiesen: " + ", ".join(map(str, sorted(unproven))))
+    if not task.workshop_complete:
+        parts.append("nicht alle Teilaufgaben erfassbar")
+    whole = len(proven) == total and task.workshop_complete
+    return len(proven), (WORKSHOP_DONE if whole else "Workshop teilweise abgeschlossen") + " – " + "; ".join(parts)
+
+
+_NAME = r"(\[[^\]]+\]|[^\s\[\](),;.]+)"
+#: nur eindeutige Ein-Tabellen-Anweisungen (kein JOIN zwischen Ziel und SET, kein „Tabelle.*“) – sonst keine Ausnahme
+_WRITE_TARGETS = (re.compile(rf"^\s*UPDATE\s+{_NAME}\s+SET\s", re.IGNORECASE),
+                  re.compile(rf"^\s*DELETE\s+(?:\*\s+)?FROM\s+{_NAME}\s*(?:WHERE\s|;|$)", re.IGNORECASE),
+                  re.compile(rf"^\s*INSERT\s+INTO\s+{_NAME}\s*[(\s]", re.IGNORECASE))
+
+
+def _write_target(action: Any, queries: dict[str, str]) -> str:
+    """Tabelle, in die ein Datenschritt schreibt (klein geschrieben) – „“, wenn sie sich nicht eindeutig ergibt."""
+    if isinstance(action, m.UpdateRecords | m.DeleteRecords | m.InsertRecords):
+        return str(action.table).lower()
+    if isinstance(action, m.RunActionQuery):
+        sql = action.sql or queries.get((action.name or "").lower(), "")
+        if re.search(r"\bIN\s*['\"]", sql, re.IGNORECASE):
+            return ""  # Ziel in einer anderen Datei („… IN 'C:\\Alt.accdb'“): nie eine Tabelle dieses Laufs
+        for pattern in _WRITE_TARGETS:
+            if found := pattern.match(sql):
+                return found.group(1).strip("[]").lower()
+    return ""
+
+
+def _cascades_from(table: str, schema: Any) -> bool:
+    """Gibt die Tabelle Änderungen per Lösch- oder Aktualisierungsweitergabe an andere Tabellen weiter?"""
+    return any((r.cascade_delete or r.cascade_update) and r.table.lower() == table.lower() for r in schema.relations)
+
+
+#: Datenbankobjekte, die ein Schritt anlegt und die sich nachprüfen lassen, wenn es sie schon gibt
+_REPLACEABLE = (m.CreateTable, m.CreateQuery, m.CreateForm, m.CreateReport, m.CopyTable, m.CreateIndex,
+                m.CreateRelationship)
+
+
 def _fingerprint(step: m.PlanStep) -> str:
     """Eindeutiger Abdruck einer Aktion (Typ, Ziel, Werte) – erkennt bereits ausgeführte Datenschritte."""
     import hashlib
@@ -249,6 +309,11 @@ class TaskPipeline:
         self._environment_probe = environment_probe
         self._sleep = sleep
         self._auto_steps: set[int] = set()
+        #: Tabellen, die ein Schritt DIESES Laufs nachweislich neu angelegt bzw. als neue Tabelle importiert hat
+        #: (Umbenennen zählt nie) – und ob die Sicherung vom Anfang des Laufs nachweislich da ist
+        self._fresh_tables: set[str] = set()
+        self._queries_now: dict[str, str] = {}
+        self._backup_verified = False
 
     def _reverify_touched(self, steps: list[m.PlanStep], results: list[StepResult]) -> list[Verification]:
         by_id = {r.step_id: r for r in results}
@@ -310,7 +375,9 @@ class TaskPipeline:
                 if widths is not None:
                     lines.append(f"Schritt {v.step_id} (create_form „{action.target()}“): in Access gemessen – {widths.detail}")
                 continue
-            if not v.passed or not isinstance(action, m.InsertRecords | m.UpdateRecords | m.ImportData):
+            # Anlagen (je Datensatz die Datei nachgeprüft) und Aktionsabfragen (Feld danach nicht leer) belegen ebenfalls
+            if not v.passed or not isinstance(action, m.InsertRecords | m.UpdateRecords | m.ImportData | m.AttachFiles
+                                              | m.RunActionQuery):
                 continue
             checks = ", ".join(c.name + (f" ({c.detail})" if c.detail else "") for c in v.checks if c.passed)
             values = ""
@@ -387,6 +454,8 @@ class TaskPipeline:
                 validation.issues.append(PlanIssue(step_id=step.id, severity="error", message=(
                     "Die angegebenen Zahlen stehen so nicht in der Aufgabe – die Rechnung wird nicht ausgeführt.")))
         issues = m.answer_issues(solution.analysis) if solution.plan.is_empty else []
+        if solution.plan.is_empty and (task.workshop_steps or not task.workshop_complete):
+            issues.append("Workshop: keine Schritte geplant – die Teilaufgaben sind damit nicht nachgewiesen")
         status = "geplant" if not solution.plan.is_empty else ("unklar" if issues else "beantwortet")
         report = ""
         if solution.plan.is_empty:
@@ -460,6 +529,38 @@ class TaskPipeline:
         backup_path = ""
 
         def finish(status: OutcomeStatus, error: str = "") -> TaskOutcome:
+            # Gescheitert/blockiert: behoben nur, wenn ein KORREKTURSCHRITT mit denselben Anforderungen tatsächlich lief –
+            # das Urteil der KI-Anforderungsprüfung allein genügt nie (der Schritt hat ja nichts geändert)
+            covers = {s.id: set(s.covers) for s in [*solution.plan.steps, *correction_steps]}
+            fixes = {s.id for s in correction_steps}
+            bad = [r for r in results if r.status in ("failed", "skipped")] if prepared.task.workshop_steps else []
+            fixed = ({n for r in results if r.status == "ok" and r.step_id in fixes for n in covers.get(r.step_id, ())}
+                     - {n for r in bad if r.step_id in fixes for n in covers.get(r.step_id, ())})
+            # gescheiterte Korrekturversuche bleiben offen; ein Hauptschritt gilt nur über gelungene Korrekturen als behoben
+            left = [r for r in bad if r.step_id in fixes or not covers.get(r.step_id) or not covers[r.step_id] <= fixed]
+            blocked = {n for r in left for n in covers.get(r.step_id, set())}
+            latest = {v.step_id: v.passed for v in verifications}  # jüngste Prüfung je Schritt zählt
+            proven_fixes = {n for sid, ok in latest.items() if ok and sid in fixes for n in covers.get(sid, ())}
+            blocked |= {n for sid, ok in latest.items() if not ok for n in covers.get(sid, ())} - proven_fixes
+            if status == "erfolgreich" and left:
+                status, error = "teilweise", f"{len(left)} Schritt(e) nicht ausgeführt – " + "; ".join(
+                    f"Schritt {r.step_id}: {r.message}" for r in left)
+            workshop: list[int] = []
+            if prepared.task.workshop_steps or not prepared.task.workshop_complete:
+                checked = requirements[0]
+                if checked is not None and blocked:  # Anforderungen offener Schritte zählen nie als nachgewiesen
+                    checked = checked.model_copy(update={"results": [
+                        r.model_copy(update={"status": "nicht erfüllt"}) if r.number in blocked else r
+                        for r in checked.results]})
+                proven, summary = workshop_summary(prepared.task, solution.analysis.requirements, checked)
+                if status != "erfolgreich" and summary.startswith(WORKSHOP_DONE):  # z. B. Schrittprüfung offen
+                    summary = "Workshop nicht abgeschlossen" + summary[len(WORKSHOP_DONE):]
+                workshop = [proven, prepared.task.workshop_steps]
+                notes.insert(0, summary)
+                if status == "erfolgreich" and not summary.startswith(WORKSHOP_DONE):
+                    status, error = "teilweise", summary  # nie „erfolgreich“, solange eine Teilaufgabe offen ist
+                elif status != "erfolgreich":
+                    error = summary + (f" – {error}" if error else "")
             duration = round(time.perf_counter() - started, 2)
             report = build_report(
                 task_text=prepared.task.text, solution=solution, validation=prepared.validation, results=results,
@@ -485,7 +586,7 @@ class TaskPipeline:
                 finished_at=now_iso(),
                 db_path=self._access.path or prepared.db_path,
             )
-            interaction.on_event(PipelineEvent(kind="status", message=status, data={"error": error}))
+            interaction.on_event(PipelineEvent(kind="status", message=status, data={"error": error, "workshop": workshop}))
             return outcome
 
         def event(kind: Any, message: str, step_id: int = 0, **data: Any) -> None:
@@ -525,6 +626,7 @@ class TaskPipeline:
             validation=prepared.validation,
             warnings=prepared.warnings,
         )
+        self._fresh_tables, self._queries_now, self._backup_verified = set(), {}, False  # nichts aus früheren Läufen
         self._auto_steps = {s.id for s in solution.plan.steps
                             if self._risk(s) == "destructive" and self._auto_allowed(s, db_path)}
         if self._auto_steps:
@@ -565,7 +667,8 @@ class TaskPipeline:
                 )
                 backup_path = backup.backup_path
                 event("backup", "Sicherungskopie erstellt.", path=backup_path)
-                if not (Path(backup_path).is_file() and Path(backup_path).stat().st_size > 0):
+                self._backup_verified = Path(backup_path).is_file() and Path(backup_path).stat().st_size > 0
+                if not self._backup_verified:
                     self._auto_steps = set()  # ohne nachweisbare Sicherung nichts automatisch löschen
             except WidsError as exc:
                 return finish("fehlgeschlagen", f"Ohne Sicherungskopie wird nichts geändert: {exc.user_message}")
@@ -595,6 +698,7 @@ class TaskPipeline:
                 check = self._validator.validate(m.ExecutionPlan.model_construct(steps=[step], notes=[]), current)
                 tables = [t.name.lower() for t in current.tables]
                 queries = {q.name.lower(): (q.sql or "").lower() for q in current.queries}
+                self._queries_now = queries
                 waits_for = _held_by(step.action, held, tables, queries)
                 if waits_for is not None:
                     result = StepResult(step_id=step.id, status="skipped", message=(
@@ -665,22 +769,26 @@ class TaskPipeline:
             after = None
             notes.append(f"Endzustand nicht lesbar: {exc.user_message}")
         failed = [r for r in results if r.status == "failed"]
+        plan_steps = {s.id: s for s in solution.plan.steps}
         skipped = [r for r in results if r.status == "skipped"]
         unverified = [v for v in verifications if not v.passed]
-        if failed:
-            done = sum(1 for r in results if r.status == "ok")
+        done = sum(1 for r in results if r.status == "ok")
+        if failed and (not prepared.task.workshop_steps or not done):
             return finish("teilweise" if done else "fehlgeschlagen", failed[0].message)
+        # Workshop: ein gescheiterter oder blockierter Schritt verhindert nicht, dass die übrigen Teilaufgaben geprüft
+        # (und der Fehler über die Selbstkorrektur angegangen) werden – „erfolgreich“ verhindert finish() trotzdem
         checkable = bool(self.settings.automation.check_requirements and solution.analysis.requirements and after is not None)
-        plan_steps = {s.id: s for s in solution.plan.steps}
         # Schrittprüfung nicht bestanden: nicht sofort aufgeben, sondern in der Selbstkorrektur einen anderen Weg suchen
         # – außer bei Datenschritten (ein zweiter Versuch könnte Datensätze doppelt anlegen) oder übersprungenen Schritten
         correctable = (checkable and not skipped and self._analyzer.available
                        and not any(isinstance(plan_steps[v.step_id].action, _DATA_ACTIONS)
                                    for v in unverified if v.step_id in plan_steps))
-        if unverified and not correctable:
+        # Workshop: weiterprüfen, damit die übrigen Teilaufgaben gezählt werden – die nicht bestandene Prüfung hält
+        # „erfolgreich“ trotzdem auf (open_checks) und ihre Anforderungen zählen nie als nachgewiesen (finish)
+        if unverified and not correctable and not prepared.task.workshop_steps:
             names = "; ".join(f"Schritt {v.step_id}: {', '.join(c.name for c in v.failed_checks)}" for v in unverified)
             return finish("teilweise", f"Die Ergebnisprüfung hat Abweichungen gefunden – {names}")
-        if skipped:
+        if skipped and not prepared.task.workshop_steps:
             return finish("teilweise", f"{len(skipped)} Schritt(e) nicht ausgeführt – "
                           + "; ".join(f"Schritt {r.step_id}: {r.message}" for r in skipped))
         if not checkable or after is None:
@@ -765,7 +873,12 @@ class TaskPipeline:
 
         # Destruktive Schritte: eigene Bestätigung zusätzlich zur Planfreigabe – außer in autorisierten Übungen mit
         # geprüfter Sicherung und eindeutigem Ziel (dort gilt weiter die Mengengrenze, max_affected bleibt gesetzt)
-        if self._risk(step) == "destructive" and step.id in self._auto_steps and self._auto_allowed(step, self._access.path):
+        tables_before = {t.name.lower() for t in self._access.schema().tables}
+        fresh = self._fresh_write(step)
+        if fresh:  # Daten einer Tabelle, die erst diese Aufgabe angelegt hat – vollständig in der Sicherung davor
+            options.max_affected = None
+        if (self._risk(step) == "destructive" and (step.id in self._auto_steps or fresh)
+                and self._auto_allowed(step, self._access.path)):
             event("log", "Löschender Schritt automatisch ausgeführt (Übungsdatenbank, Sicherung geprüft): "
                          + self._impact(step)[0], step.id)
         elif self._risk(step) == "destructive":
@@ -786,6 +899,7 @@ class TaskPipeline:
             try:
                 result = self._access.run(partial(self._executor.execute, step=step, options=options))
                 result.attempts = attempts
+                self._note_created(step, result, tables_before)
                 return result
             except TaskCancelledError:
                 raise
@@ -803,7 +917,7 @@ class TaskPipeline:
                     if choice == "abort":
                         raise TaskCancelledError() from exc
                     if choice == "skip":
-                        return StepResult(step_id=step.id, status="skipped", message=f"{exc.user_message} – übersprungen", attempts=attempts)
+                        return self._existing(step, exc, attempts)
                     if choice == "overwrite":
                         options.replace = True
                         event("log", f"{exc.user_message} – vorhandenes Objekt wird ersetzt.", step.id)
@@ -1046,6 +1160,9 @@ class TaskPipeline:
             queries = {q.name.lower(): (q.sql or "").lower() for q in schema.queries}
             if isinstance(action, m.DeleteRecords | m.UpdateRecords):
                 table = schema.table(action.table)
+                if (table is not None and not table.linked and action.table.lower() in self._fresh_tables
+                        and not _cascades_from(action.table, schema)):
+                    return True  # in diesem Lauf angelegt: auch „alle Datensätze“ betrifft nur Daten dieser Aufgabe
                 if not action.where or table is None or table.linked:
                     return False
                 if isinstance(action, m.DeleteRecords) and any(  # Löschweitergabe entfernt mehr als gezählt
@@ -1099,6 +1216,58 @@ class TaskPipeline:
             return f"{step.title} (Auswirkung nicht ermittelbar: {exc.user_message})", False
         return f"{step.title} – dieser Schritt löscht oder überschreibt Bestehendes.", False
 
+    def _fresh_write(self, step: m.PlanStep) -> bool:
+        """Schreibt der Schritt eindeutig nur in eine Tabelle, die dieser Lauf selbst angelegt hat (nach geprüfter
+        Sicherung, ohne Weitergabe an andere Tabellen)? Dann betrifft er nur Daten dieser Aufgabe."""
+        target = _write_target(step.action, self._queries_now)
+        if not (self._backup_verified and target and target in self._fresh_tables):
+            return False
+        try:
+            return not _cascades_from(target, self._access.schema())
+        except WidsError:
+            return False
+
+    def _note_created(self, step: m.PlanStep, result: StepResult, tables_before: set[str]) -> None:
+        """Herkunft „in diesem Lauf angelegt“ hängt an der Tabelle, nicht am Namen: Umbenennen trägt sie mit, ein
+        wiederverwendeter Name (alte Tabelle umbenannt) oder Löschen entfernt sie."""
+        if result.status != "ok":
+            return
+        action = step.action
+        if isinstance(action, m.RenameTable):
+            fresh = action.old_name.lower() in self._fresh_tables
+            self._fresh_tables -= {action.old_name.lower(), action.new_name.lower()}
+            if fresh:
+                self._fresh_tables.add(action.new_name.lower())
+            return
+        if isinstance(action, m.DeleteTable):
+            self._fresh_tables.discard(action.name.lower())
+            return
+        name = action.name if isinstance(action, m.CreateTable) else action.table if isinstance(action, m.ImportData) else ""
+        if name and name.lower() not in tables_before:
+            self._fresh_tables.add(name.lower())
+
+    def _existing(self, step: m.PlanStep, error: WidsError, attempts: int) -> StepResult:
+        """Das Objekt gibt es schon (z. B. erneuter Start eines Workshops): nicht neu anlegen, sondern mit derselben
+        unabhängigen Prüfung wie ein neu angelegtes kontrollieren. Entspricht es der Vorgabe, ist der Schritt erledigt;
+        sonst bleibt er offen – überschrieben wird nie."""
+        # Tabellenkopien nicht: die Prüfung vergleicht dort Struktur und Anzahl, nicht jeden Wert
+        if isinstance(step.action, _REPLACEABLE) and not isinstance(step.action, m.CopyTable):
+            probe = StepResult(step_id=step.id, attempts=attempts, details={"existing": True},
+                               message=f"{error.user_message} – entspricht der Vorgabe (unabhängig nachgeprüft), "
+                                       "nicht neu angelegt")
+            try:
+                check = self._access.run(partial(self._verifier.verify, step=step, result=probe))
+            except WidsError:
+                check = None
+            if check is not None and check.passed:
+                return probe
+            if check is not None:
+                return StepResult(step_id=step.id, status="skipped", attempts=attempts, message=(
+                    f"{error.user_message} – entspricht nicht der Vorgabe ("
+                    + ", ".join(c.name for c in check.failed_checks) + "), nicht überschrieben"))
+        return StepResult(step_id=step.id, status="skipped", message=f"{error.user_message} – übersprungen",
+                          attempts=attempts)
+
     def _resolve_conflict(
         self, step: m.PlanStep, error: WidsError, interaction: Interaction
     ) -> tuple[ConflictChoice, str]:
@@ -1112,10 +1281,7 @@ class TaskPipeline:
         renamable = isinstance(
             step.action, m.CreateTable | m.CreateQuery | m.CreateForm | m.CreateReport | m.CopyTable
         )
-        replaceable = isinstance(
-            step.action,
-            m.CreateTable | m.CreateQuery | m.CreateForm | m.CreateReport | m.CopyTable | m.CreateIndex | m.CreateRelationship,
-        )
+        replaceable = isinstance(step.action, _REPLACEABLE)
         choice: ConflictChoice
         if policy == "ask" and not _can_ask(interaction):
             choice = "skip"  # Hintergrund: Ersetzen/Umbenennen ist eine Entscheidung des Benutzers – nie automatisch

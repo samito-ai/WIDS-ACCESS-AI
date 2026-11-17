@@ -1003,3 +1003,7 @@ class CapturedTask(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     #: Abbildungen der te.comp-Aufgabenseite (PNG) – Übungsmaterial, nie Bildschirmfotos; nicht gespeichert
     images: list[bytes] = Field(default_factory=list, exclude=True, repr=False)
+    #: te.comp-Workshop: Anzahl der erfassten Teilaufgaben (0 = keine Workshop-Erfassung) …
+    workshop_steps: int = 0
+    #: … und ob ALLE Teilaufgaben erfasst wurden; False = der Workshop darf nie als abgeschlossen gelten
+    workshop_complete: bool = True

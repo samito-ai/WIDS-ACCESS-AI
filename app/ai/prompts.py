@@ -406,8 +406,8 @@ Objekte aus der Liste „IN DIESER AUFGABE ANGELEGT“ darfst du unter demselben
 eine Neuerstellung muss ALLE Anforderungen an dieses Objekt enthalten, nicht nur die offene. Angefügte Bilder stammen
 aus der Übungsaufgabe und zeigen das Ziel. Ist keine sichere Korrektur möglich, liefere leere "steps" und nenne den
 konkreten Grund in "notes".
-Antworte mit genau einem JSON-Objekt: {"steps": [{"title": "...", "rationale": "Ursache: ...", "action": {AKTION}}],
-"notes": []}
+Antworte mit genau einem JSON-Objekt: {"steps": [{"title": "...", "rationale": "Ursache: ...", "covers": [Nummern der
+offenen Anforderungen, die der Schritt behebt], "action": {AKTION}}], "notes": []}
 
 """ + ACTION_REFERENCE
 

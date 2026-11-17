@@ -82,10 +82,47 @@ class TaskReader:
             except Exception as exc:
                 log.warning("Abbildungen der Bildschirminfo nicht lesbar: %s", exc)
         workshop = self._workshop(task.db_path) if is_tecomp and task.db_path and exercise is None else None
-        if workshop is not None and (context := tecomp.workshop_context(workshop)):
-            task.text += (f"\n\nHINTERGRUND DES TE.COMP-WORKSHOPS „{workshop.name}“ (aus den Workshop-Dateien – nur zum "
-                          f"Verständnis; bearbeite ausschließlich die oben gezeigte Aufgabe):\n{context}")
+        if workshop is not None:
+            self._whole_workshop(task, workshop)
         return task
+
+    def _whole_workshop(self, task: CapturedTask, workshop: Path) -> None:
+        """Ein Alt+W für den ganzen Workshop: alle Teilaufgaben aus der te.comp-Aufgabenleiste (geblättert wird mit
+        te.comps eigenen Pfeilen, danach steht die Leiste wieder wie vorher). In einer Prüfungsumgebung wird nichts
+        angeklickt. Ohne vollständige Liste gilt der Workshop nie als abgeschlossen."""
+        from app.security.policy import SafetyPolicy
+
+        steps = None
+        if not SafetyPolicy(self._settings.security).check_environment(*capture.environment()).blocked:
+            try:
+                steps = tecomp.workshop_steps()
+            except Exception as exc:  # die sichtbare Teilaufgabe bleibt erfasst – aber nie als ganzer Workshop
+                log.warning("Workshop-Teilaufgaben nicht lesbar: %s", exc)
+        context = tecomp.workshop_context(workshop)
+        if steps is not None and not steps.restored:
+            task.warnings.append("Die te.comp-Aufgabenleiste steht nach dem Lesen nicht mehr an derselben Stelle.")
+        if steps is None or not steps.steps:
+            task.workshop_complete = False
+            task.warnings.append("Nur die sichtbare Teilaufgabe des Workshops wurde erfasst – der Workshop gilt daher "
+                                 "nicht als abgeschlossen.")
+            if context:
+                task.text += (f"\n\nHINTERGRUND DES TE.COMP-WORKSHOPS „{workshop.name}“ (aus den Workshop-Dateien – nur "
+                              f"zum Verständnis; bearbeite ausschließlich die oben gezeigte Aufgabe):\n{context}")
+            return
+        task.workshop_steps, task.workshop_complete = len(steps.steps), steps.complete
+        if not steps.complete:
+            task.warnings.append(f"Workshop nicht vollständig erfassbar: {steps.problem}")
+        notes = "\n".join(f"- {n}" for n in steps.notes)
+        task.text = (
+            f"TE.COMP-WORKSHOP „{workshop.name}“ – ALLE {len(steps.steps)} TEILAUFGABEN (aus der te.comp-Aufgabenleiste):\n"
+            + "\n".join(steps.steps)
+            + "\n\nARBEITSWEISE: Bearbeite ALLE Teilaufgaben in einem Plan, in fachlich sinnvoller Reihenfolge (Tabellen "
+            "und Importe vor neuen Feldern, Daten vor Filtern, Sortierungen, Abfragen, Formularen und Berichten, die darauf "
+            "aufbauen). Beginne JEDE Anforderung mit der Nummer ihrer Teilaufgabe in eckigen Klammern, z. B. „[3] Feld "
+            "Cover vom Typ Anlage in CDs“. Was laut Datenbankstruktur schon richtig erledigt ist, nicht noch einmal "
+            "ausführen – die Anforderung trotzdem aufführen (sie wird nachgeprüft)."
+            + (f"\n\nHINWEISE AUS DER AUFGABENLEISTE:\n{notes}" if notes else "")
+            + (f"\n\nHINTERGRUND UND HILFESEITEN DES WORKSHOPS (aus den Workshop-Dateien):\n{context}" if context else ""))
 
     def _from_png(self, pngs: list[bytes], *, method: str, source: str, allow_vision: bool) -> CapturedTask:
         warnings: list[str] = []

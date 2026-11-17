@@ -3,6 +3,42 @@
 Alle wichtigen Änderungen an WIDS ACCESS AI. Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/),
 Versionen nach [Semantic Versioning](https://semver.org/lang/de/).
 
+## [1.1.0] – 2026-11-17
+
+### Neu: ein Alt+W für den ganzen te.comp-Workshop
+- WIDS liest **alle Teilaufgaben** eines geöffneten te.comp-Workshops aus der Aufgabenleiste – auch die gerade nicht
+  sichtbaren. Dazu blättert es mit te.comps eigenen Pfeilen (Fensternachricht an genau diese zwei Schaltflächen: keine
+  Mausbewegung, kein Fokuswechsel, nie „Prüfen“, „Nächste Aufgabe“ oder „Abschließen“) und stellt die Leiste danach
+  wieder genau so ein, wie sie war. In einer Prüfungsumgebung wird nichts angeklickt.
+- Alle Teilaufgaben gehen als **ein Plan** an die KI, in fachlich sinnvoller Reihenfolge (Tabellen und Importe vor
+  Feldern, Daten vor Filtern, Sortierungen, Abfragen, Formularen und Berichten). Hilfeseiten des Workshops („Weitere
+  Infos“, „Lösungstipp“) dienen als Hintergrund. Die verschlüsselten te.comp-Dateien (WS.epp/WS.esx) werden bewusst
+  nicht gelesen.
+- **Status je Teilaufgabe:** Jede Anforderung trägt die Nummer ihrer Teilaufgabe. „Workshop vollständig abgeschlossen“
+  nur, wenn jede erfasste Teilaufgabe nachgewiesen ist und alle Teilaufgaben erfasst wurden; sonst „Workshop teilweise
+  abgeschlossen – k von n …“ mit den offenen Nummern. Konnte nur die sichtbare Karte gelesen werden, gilt der Workshop
+  nie als abgeschlossen.
+- **Bereits erledigte Teile:** Ein Objekt, das schon existiert, wird nicht neu angelegt, sondern über die
+  Anforderungsprüfung nachgeprüft (vorher galt der Schritt pauschal als „nicht ausgeführt“). Daten werden wie bisher
+  nie doppelt eingefügt.
+- **Dashboard:** erkannte und nachgewiesene Teilaufgaben, aktueller Schritt, KI-Kosten dieser Aufgabe mit Budget und
+  höchstens noch möglichem Betrag.
+
+### Behoben (aus drei echten Workshop-Läufen und Codex-Reviews)
+- Aufgabenleiste wurde bei 150 % Bildschirmskalierung nicht erkannt: Maße relativ zur Leistenhöhe.
+- **Befüllen nachgeprüft:** Eine Aktualisierung mit berechnetem Wert (z. B. DLookUp) meldete „33 Datensätze
+  geändert“, ließ das Feld aber überall leer – und die Teilaufgabe galt als nachgewiesen. Jetzt muss das Feld danach in
+  den betroffenen Datensätzen Werte haben; sonst ist der Schritt nicht bestanden.
+- **Teilaufgaben nie ohne Schrittnachweis:** Anforderungen eines gescheiterten, blockierten oder nicht bestandenen
+  Schritts zählen nie als nachgewiesen – außer eine gelungene, bestätigte Korrektur deckt sie ab. Ein Fehlschlag hält die
+  Prüfung der übrigen Teilaufgaben nicht mehr auf.
+- **Frisch importierte Daten:** Die Grenze von 25 Datensätzen je Schritt gilt nicht für Tabellen, die derselbe Lauf
+  angelegt oder importiert hat (nur nach geprüfter Sicherung, nur eindeutige Ein-Tabellen-Anweisungen, ohne Weitergabe,
+  Umbenennen überträgt die Herkunft nicht auf alte Daten, keine fremden Dateien).
+- Bestätigte Anlage-Schritte und Aktionsabfragen gelten als Beleg für die Anforderungsprüfung.
+- Vorhandene Objekte: eine gleichnamige Aktionsabfrage gilt nie als die verlangte Auswahlabfrage (Abfragetyp auch bei
+  reinem SQL geprüft); Tabellenkopien werden nicht als „bereits erledigt“ übernommen.
+
 ## [1.0.0] – 2026-11-17 (Stable)
 
 Erste Stable-Version. Funktionsumfang wie Beta 7; diese Version stabilisiert, sie bringt keine neuen Funktionen.

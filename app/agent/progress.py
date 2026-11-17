@@ -23,6 +23,11 @@ class ProgressTracker:
     result: str = ""
     started: float | None = None
     finished: float | None = None
+    #: te.comp-Workshop: erfasste Teilaufgaben und (am Ende) davon nachgewiesene
+    workshop_total: int = 0
+    workshop_proven: int | None = None
+    #: Aufgabe im Verlauf – für die Kosten dieser Aufgabe
+    task_id: int = 0
     _titles: dict[int, str] = field(default_factory=dict)
 
     @property
@@ -77,6 +82,9 @@ class ProgressTracker:
             self.mark("Schritte ausführen")
             self.mark("Ergebnisprüfung", "active")
             self.current = "Ergebnisprüfung läuft"
+        elif kind == "status" and data.get("workshop"):
+            self.workshop_proven, total = data["workshop"]
+            self.workshop_total = total or self.workshop_total
         elif kind == "log" and data.get("correction"):
             self.correction = f"Selbstkorrektur, Zyklus {data['correction']} von 3 – Ursache: {data.get('cause', '?')}"
 
@@ -98,6 +106,9 @@ class ProgressTracker:
         out = [f"{icons[state]} {phase}" + (f" ({self.done_steps}/{self.total_steps})" if phase == "Schritte ausführen"
                                              and self.total_steps else "")
                for phase, state in self.phases.items()]
+        if self.workshop_total:
+            out.insert(0, f"Workshop: {self.workshop_total} Teilaufgaben erkannt" + (
+                f", {self.workshop_proven} nachgewiesen" if self.workshop_proven is not None else ""))
         if self.current:
             out.append(f"→ {self.current}")
         if self.correction:

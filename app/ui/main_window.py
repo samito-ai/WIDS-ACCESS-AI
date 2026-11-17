@@ -410,6 +410,7 @@ class MainWindow(QMainWindow):
             box.addWidget(self.dash[key])
             grid.addWidget(frame, index // 3, index % 3)
         self.live = ProgressView(self)
+        self.live.cost_line = self._task_cost_line
         grid.addWidget(self.live.frame, 1, 2)
         layout.addLayout(grid)
         self.costs = CostView(self)
@@ -520,6 +521,18 @@ class MainWindow(QMainWindow):
         layout.addWidget(split, 1)
         self.set_busy(False)
 
+    def _task_cost_line(self) -> str:
+        """KI-Kosten der laufenden Aufgabe, ihr Budget und was höchstens noch dazukommen kann (das Budget wird vor jeder
+        Anfrage geprüft – eine genauere Vorhersage der Restkosten gibt es nicht)."""
+        if not self.live.tracker.task_id:
+            return ""
+        spent = self.ctx.storage.usage_summary(task_id=self.live.tracker.task_id).cost_usd
+        limit = self.ctx.settings.ai.task_cost_limit_usd
+        text = f"KI-Kosten dieser Aufgabe {spent:.2f} $"
+        if limit > 0:
+            text += f" von {limit:.2f} $ Budget (höchstens noch {max(limit - spent, 0):.2f} $)"
+        return text
+
     def capture_task(self, then: str) -> None:
         """Erfasst die Aufgabe (Alt+W / Alt+T). Im Hintergrundmodus öffnet sich dabei kein Fenster."""
         if self._busy:
@@ -537,7 +550,10 @@ class MainWindow(QMainWindow):
             hint = " ".join(task.warnings)
             how = {"tecomp": "aus der te.comp-Aufgabenseite", "ocr": f"per OCR aus „{task.source}“"}.get(
                 task.method, f"per KI-Bilderkennung aus „{task.source}“")
+            if task.workshop_steps:
+                how = f"aus dem te.comp-Workshop ({task.workshop_steps} Teilaufgaben)"
             self.set_busy(False, f"Aufgabe {how} erfasst. {hint}")
+            self.live.tracker.workshop_total = task.workshop_steps
             self.live.tracker.mark("Aufgabenstellung erkannt")
             self.live.render()
             if self._cancel.is_set():
@@ -617,6 +633,7 @@ class MainWindow(QMainWindow):
             self._prepared = prepared
             self._render_prepared(prepared)
             answered = prepared.solution.plan.is_empty
+            tracker.task_id = prepared.task_id
             if self.ctx.access.is_connected:
                 tracker.mark("Datenbank verbunden")
             tracker.mark("KI analysiert Anforderungen")

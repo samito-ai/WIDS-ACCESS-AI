@@ -175,7 +175,7 @@ def alt_w_execute(data: str, pids: set[int]) -> None:
         status = latest_task(data)
         return status if status not in ("", "erkannt", "geplant", "läuft") else ""
 
-    status = wait_for(finished, 600)
+    status = wait_for(finished, 1200)  # ganzer Workshop: Plan über alle Teilaufgaben, Prüfung, Selbstkorrektur
     if focus_changes or windows(pids):  # Diagnose: welches Fenster den Fokus nahm (Benutzer, te.comp, Access, WIDS?)
         def owner(title: str) -> str:
             hwnd = win32gui.FindWindow(None, title) if title else 0
@@ -190,6 +190,8 @@ def alt_w_execute(data: str, pids: set[int]) -> None:
 
     record = Storage().list_tasks(limit=1)[0]
     print(f"      Ergebnis: {status} – {record.title}; Sicherung: {record.backup_path}")
+    if record.error:
+        print(f"      Meldung: {record.error[:400]}")
     usage = Storage().usage_summary("total")
     print(f"      KI-Verbrauch: {usage}")
     check("Alt+W (freigegeben): Aufgabe ausgeführt, Sicherung erstellt",
@@ -230,6 +232,7 @@ def main() -> int:
             return 1
         budget = float(next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--budget=")), "0.60"))
         settings.ai.cost_limit_usd, settings.ai.cost_limit_period = budget, "total"  # harte Kostenbremse
+        settings.ai.task_cost_limit_usd = budget  # auch das Aufgabenbudget (Standard 1 $) auf genau diese Bremse
         print(f"      Kostenbremse: {budget:.2f} $")
         print(f"      Übung: {exercise[0]}\n      Datenordner (Verlauf, Bericht): {data}")
     Storage().save_settings(settings)
