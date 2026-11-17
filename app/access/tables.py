@@ -988,6 +988,21 @@ class TableOps:
             sql += f" WHERE {ensure_safe_fragment(where)}"
         return self._guarded_execute(sql, f"Datensätze in „{table}“ ändern", max_affected=max_affected)
 
+    def update_literal(self, table: str, field: str, value: Any, where: str | None = None, *,
+                       max_affected: int | None = None) -> int:
+        """Wie update_records, aber der Wert ist IMMER ein Literal – auch ein Text, der mit „=“ beginnt (z. B.
+        Inhalt einer Textdatei), wird nie als Ausdruck ausgeführt."""
+        from app.access.naming import sql_literal
+
+        tabledef = self._require_table(table)
+        fld = self._require_field(tabledef, field)
+        access_type = access_type_from_dao(int(fld.Type), int(fld.Attributes))
+        sql = (f"UPDATE {quote_ident(table)} SET {quote_ident(str(fld.Name))} = "
+               f"{sql_literal(to_dao(value, access_type, str(fld.Name)))}")
+        if where:
+            sql += f" WHERE {ensure_safe_fragment(where)}"
+        return self._guarded_execute(sql, f"Datensätze in „{table}“ ändern", max_affected=max_affected)
+
     def delete_records(self, table: str, where: str | None = None, *, max_affected: int | None = None) -> int:
         self._require_table(table)
         sql = f"DELETE FROM {quote_ident(table)}"

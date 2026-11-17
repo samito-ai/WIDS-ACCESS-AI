@@ -57,3 +57,16 @@ def test_text_file_is_decoded_and_line_endings_normalized(tmp_path: Path) -> Non
     path = tmp_path / "t.txt"
     path.write_bytes("Größe\nzählt\r\n\r\n".encode("cp1252"))
     assert importer.read_text_file(path) == "Größe\r\nzählt"
+
+
+def test_a_part_inside_another_name_is_never_a_match() -> None:
+    """Codex: „Ann - Song“ darf nicht zu Interpret „Joanne“ passen (Teil nur als Anfang eines Felds, ab 4 Zeichen)."""
+    mapping = plan_key_mapping([("Ann - Song",)], [(1, ("Joanne", "Song")), (2, ("Bob", "Other"))])
+    assert mapping.keys == {}
+
+
+def test_numbers_in_file_names_must_match_exactly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(importer, "search_dirs", lambda db_path: [tmp_path])
+    (tmp_path / "Kunden2026.csv").write_text("x", encoding="utf-8")
+    with pytest.raises(Exception, match="Datei"):
+        importer.resolve_source("Kunden2025.csv", str(tmp_path / "db.accdb"))  # anderer Jahrgang: nie automatisch

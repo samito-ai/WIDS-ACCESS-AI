@@ -216,6 +216,41 @@ def _write_target(action: Any, queries: dict[str, str]) -> str:
     return ""
 
 
+def _converts_without_loss(e: Any, action: m.ChangeFieldType) -> bool:
+    """Lässt sich jeder vorhandene Wert verlustfrei in den neuen Typ umwandeln? Geprüft in Python mit den WIDS-Umwandlungs-
+    regeln (Access-SQL wie Val() hängt von der Spracheinstellung ab: „1,5“ → 1). Unbekannte Kombination = nein."""
+    from app.access.constants import AccessType as T
+    from app.access.naming import quote_ident
+    from app.access.values import to_dao
+
+    whole = {T.BYTE: (0, 255), T.INTEGER: (-32768, 32767), T.LONG: (-2**31, 2**31 - 1)}
+    supported = {T.DATETIME, T.DOUBLE, T.SINGLE, T.CURRENCY, T.LONG_TEXT, T.SHORT_TEXT, *whole}
+    if action.new_type not in supported:
+        return False
+    f = quote_ident(action.field)
+    _, rows = e.tables.read_sql(f"SELECT DISTINCT {f} FROM {quote_ident(action.table)} WHERE {f} Is Not Null",
+                                limit=20001)
+    if len(rows) > 20000:
+        return False
+    for (value,) in rows:
+        if action.new_type == T.SHORT_TEXT:
+            if len(str(value)) > (action.size or 255):
+                return False
+            continue
+        if action.new_type == T.LONG_TEXT:
+            continue
+        try:
+            to_dao(value, action.new_type, action.field)
+            if action.new_type in whole:
+                number = float(str(value).replace(",", ".")) if isinstance(value, str) else float(value)
+                low, high = whole[action.new_type]
+                if number != int(number) or not low <= number <= high:
+                    return False
+        except Exception:
+            return False
+    return True
+
+
 def _cascades_from(table: str, schema: Any) -> bool:
     """Gibt die Tabelle Änderungen per Lösch- oder Aktualisierungsweitergabe an andere Tabellen weiter?"""
     return any((r.cascade_delete or r.cascade_update) and r.table.lower() == table.lower() for r in schema.relations)
@@ -343,7 +378,7 @@ class TaskPipeline:
         """Risikostufe mit Blick auf den TATSÄCHLICHEN Feldtyp: eine verlustfreie Typerweiterung (z. B. Kurzer → Langer
         Text) ist keine löschende Änderung. Unbekannter Ausgangstyp = die vorsichtige Einstufung bleibt."""
         action = step.action
-        if isinstance(action, m.UpdateRecords):
+        if isinstance(action, m.UpdateRecords | m.SetFieldFromFile | m.MapKeys):
             try:
                 target = self._access.schema().table(action.table)
             except Exception:
@@ -1185,12 +1220,16 @@ class TaskPipeline:
             if isinstance(action, m.DeleteTable):
                 table = schema.table(action.name)
                 return table is not None and not table.linked
+            if isinstance(action, m.MapKeys):
+                table = schema.table(action.table)
+                return table is not None and not table.linked
             if isinstance(action, m.ChangeFieldType):
-                # verlustbehaftet nie bei vorhandenen Daten – nur bei einer Tabelle, die dieser Lauf gerade angelegt hat
-                # (z. B. Spieldauer „00:05:29“ von Text nach Datum/Uhrzeit), deren Daten vollständig in der Sicherung liegen
+                # nur bei einer Tabelle, die dieser Lauf gerade angelegt hat – und nur, wenn JEDER vorhandene Wert sich
+                # verlustfrei umwandeln lässt (deren Daten stehen nicht in der Sicherung vom Laufbeginn)
                 table = schema.table(action.table)
                 return (table is not None and not table.linked and action.table.lower() in self._fresh_tables
-                        and not _cascades_from(action.table, schema))
+                        and not _cascades_from(action.table, schema)
+                        and self._access.run(lambda e: _converts_without_loss(e, action)))
             if isinstance(action, m.RemoveField):
                 table = schema.table(action.table)
                 return table is not None and not table.linked and table.field(action.field) is not None

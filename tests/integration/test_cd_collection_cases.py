@@ -132,3 +132,26 @@ def test_existing_foreign_keys_are_never_overwritten(harness: Any) -> None:
     assert h.access.run(lambda e: e.tables.count_records("Tracks", "[CD-Nummer] = 5")) == 1, "nichts überschrieben"
     checks = {c.name: c for v in outcome.verifications for c in v.checks}
     assert not checks["Zugeordnete Schlüssel gespeichert"].passed, "falscher vorhandener Wert fällt in der Prüfung auf"
+
+
+def test_lossy_type_change_on_a_fresh_table_stays_blocked(harness: Any) -> None:
+    """Codex: auch bei einer in diesem Lauf angelegten Tabelle keine Typänderung, die Werte verliert (1,5 → Zahl)."""
+    table = {"title": "T", "action": {"action": "create_table", "name": "Messung", "fields": [
+        {"name": "Nr", "type": "Zahl"}, {"name": "Wert", "type": "double"}]}}
+    data = {"title": "Daten", "action": {"action": "insert_records", "table": "Messung", "records": [{"Nr": 1, "Wert": 1.5}]}}
+    change = {"title": "Typ", "action": {"action": "change_field_type", "table": "Messung", "field": "Wert", "new_type": "Zahl"}}
+    h = harness([plan([table, data, change])])
+    outcome = run(h)
+    assert outcome.results[2].status == "skipped" and outcome.status != "erfolgreich"
+    assert h.access.run(lambda e: e.tables.count_records("Messung", "Wert = 1.5")) == 1, "Wert unverändert"
+
+
+def test_file_content_starting_with_equals_is_stored_literally(harness: Any, tmp_path: Path) -> None:
+    """Codex: ein Dateiinhalt wie „=Null“ darf nie als Ausdruck ausgeführt werden."""
+    (tmp_path / "Formel.txt").write_text("=Null", encoding="utf-8")
+    step = {"title": "Text", "action": {"action": "set_field_from_file", "table": "Tracks", "field": "Liedtext",
+                                       "file": "Formel.txt", "where": "[Titel]='Letter Perfect'"}}
+    h = harness([plan([TRACKS_TABLE, TRACKS_DATA, step])])
+    run(h)
+    _, rows = h.access.run(lambda e: e.tables.read_sql("SELECT Liedtext FROM Tracks WHERE Titel='Letter Perfect'"))
+    assert rows[0][0] == "=Null"

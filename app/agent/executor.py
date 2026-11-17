@@ -264,7 +264,7 @@ class AccessExecutor:
 
         source = importer.resolve_source(a.file, e.path)
         text = importer.read_text_file(source)
-        affected = e.tables.update_records(a.table, {a.field: text}, a.where, max_affected=o.max_affected)
+        affected = e.tables.update_literal(a.table, a.field, text, a.where, max_affected=o.max_affected)
         return StepResult(step_id=0, message=f"Inhalt von „{source.name}“ ({len(text)} Zeichen) in {affected} "
                                              f"Datensatz/-sätze von „{a.table}.{a.field}“ übernommen",
                           details={"affected": affected, "file": str(source), "chars": len(text)})
@@ -274,7 +274,9 @@ class AccessExecutor:
         from app.core.errors import ApprovalRequiredError
 
         columns = ", ".join(quote_ident(f) for f in a.source_fields)
-        _, sources = e.tables.read_sql(f"SELECT DISTINCT {columns} FROM {quote_ident(a.table)}", limit=20000)
+        _, sources = e.tables.read_sql(f"SELECT DISTINCT {columns} FROM {quote_ident(a.table)}", limit=20001)
+        if len(sources) > 20000:
+            raise WidsError(f"„{a.table}“ hat mehr als 20 000 verschiedene Werte – Zuordnung so nicht sicher möglich.")
         lookup = ", ".join(quote_ident(f) for f in [a.lookup_key, *a.lookup_fields])
         _, rows = e.tables.read_sql(f"SELECT {lookup} FROM {quote_ident(a.lookup_table)}", limit=100000)
         mapping = plan_key_mapping([tuple(r) for r in sources if any(v is not None for v in r)],
@@ -291,6 +293,7 @@ class AccessExecutor:
         affected = sum(e.tables.update_records(a.table, {a.target_field: mapping.keys[s]}, where)
                        for s, where in planned.items())
         unresolved = [[list(s), why] for s, why in mapping.unresolved.items()]
+        unresolved += [[list(r), "leer"] for r in sources if all(v is None for v in r)]
         message = (f"{len(mapping.keys)} von {len(mapping.keys) + len(unresolved)} Werten eindeutig zugeordnet, "
                    f"{affected} Datensätze in „{a.table}.{a.target_field}“ befüllt")
         if unresolved:
@@ -433,7 +436,10 @@ def object_property_answer(e: AccessEngine, a: m.AnswerObjectProperty) -> str:
         if a.property == "group_by" and a.object_type == "report":
             return ", ".join(g.expression for g in info.group_levels) or "keine Gruppierung"  # type: ignore[union-attr]
         if a.property == "sort":
-            return str(info.properties.get("OrderBy") or "") or "keine gespeicherte Sortierung"
+            levels = [f"{g.expression} ({'absteigend' if g.sort_descending else 'aufsteigend'})"
+                      for g in getattr(info, "group_levels", [])]
+            order = str(info.properties.get("OrderBy") or "")
+            return "; ".join(x for x in [order, *levels] if x) or "keine gespeicherte Sortierung"
     elif a.object_type == "query":
         query = schema.query(a.name)
         if query is None:

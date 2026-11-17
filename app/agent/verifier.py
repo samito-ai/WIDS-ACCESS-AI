@@ -549,7 +549,7 @@ class ResultVerifier:
         if p.caption is not None:
             v.add("Beschriftung", info.caption == p.caption, info.caption)
         if p.format is not None:
-            v.add("Format", canonical_format(info.format) == canonical_format(p.format), info.format)
+            v.add("Format", info.format == canonical_format(p.format), info.format)  # gespeicherter Wert muss stimmen
         if p.input_mask is not None:
             v.add("Eingabeformat", info.input_mask == p.input_mask, info.input_mask)
         if p.decimal_places is not None:
@@ -620,7 +620,7 @@ class ResultVerifier:
             v.add(f"Optimale Breite „{col}“", int(get_property(fields[col.lower()], "ColumnWidth", -1) or -1) > 0)
         for col, fmt in spec.formats.items():
             stored = str(get_property(fields[col.lower()], "Format", ""))
-            v.add(f"Format „{col}“", canonical_format(stored) == canonical_format(fmt), stored)
+            v.add(f"Format „{col}“", stored == canonical_format(fmt), stored)
         for col, cap in spec.captions.items():
             v.add(f"Beschriftung „{col}“", str(get_property(fields[col.lower()], "Caption", "")) == cap, cap)
         if spec.alternate_back_color:
@@ -736,6 +736,10 @@ class ResultVerifier:
               "; ".join(wrong) or f"{len(mapping)} Werte zugeordnet")
         v.add("Schlüssel existieren in der Nachschlagetabelle", not missing_keys, ", ".join(missing_keys))
         unresolved = list(r.details.get("unresolved", []))
+        # unabhängig vom Ergebnis der Zuordnung: bleibt ein Datensatz MIT Quellwert ohne Schlüssel, ist es nicht erledigt
+        has_source = " OR ".join(f"{quote_ident(f)} Is Not Null" for f in a.source_fields)
+        open_rows = e.tables.count_records(a.table, f"{quote_ident(a.target_field)} Is Null AND ({has_source})")
+        v.add("Kein Datensatz mit Quellwert ohne Schlüssel", open_rows == 0, f"{open_rows} ohne Schlüssel")
         v.add("Alle Werte eindeutig zugeordnet", not unresolved,
               "; ".join(f"{' '.join(map(str, s))}: {why}" for s, why in unresolved))
         if r.details.get("similar"):
@@ -861,8 +865,12 @@ class ResultVerifier:
                 for wanted, axis, label in ((change.merge_down, "rows", "Zeilen"), (change.merge_right, "columns", "Spalten")):
                     if wanted:
                         covered = _cells_covered(found, controls, axis)
-                        v.add(f"„{change.name}“ über {wanted + 1} {label} verbunden", covered >= wanted + 1,
-                              f"reicht über {covered} {label}")
+                        left_over = [x for x in controls if x.control_type == c.AC_EMPTY_CELL and x.layout_id == found.layout_id
+                                     and found.left - 30 <= x.left < found.left + found.width - 30
+                                     and found.top - 30 <= x.top < found.top + found.height - 30]
+                        v.add(f"„{change.name}“ über {wanted + 1} {label} verbunden", covered >= wanted + 1 and not left_over,
+                              f"reicht über {covered} {label}" + (f", {len(left_over)} leere Zelle(n) darunter/daneben"
+                                                                  if left_over else ""))
             if found is None or found.control_type not in (c.AC_TEXT_BOX, c.AC_COMBO_BOX):
                 continue  # diese Merkmale liest inspect nur bei Text-/Kombinationsfeldern
             flags = found.formatting.split(", ")

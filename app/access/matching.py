@@ -25,7 +25,9 @@ _PARTS = re.compile(r"\s+[-–/|]\s+|;")
 
 
 def _fits(parts: list[str], fields: list[str]) -> bool:
-    return any(p in fields for p in parts) and all(any(p == f or p in f for f in fields) for p in parts)
+    # „Archie Shepp“ ist Anfang von „Archie Shepp / Jasper van't Hof“; „Ann“ steckt zwar in „Joanne“, zählt aber nicht
+    return any(p in fields for p in parts) and all(
+        any(p == f or (len(p) >= 4 and f.startswith(p)) for f in fields) for p in parts)
 
 
 def match_where(fields: Sequence[str], values: Sequence[Any]) -> str:

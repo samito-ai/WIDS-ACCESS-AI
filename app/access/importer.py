@@ -126,7 +126,9 @@ def resolve_source(name: str, db_path: str) -> Path:
     scored = sorted(((difflib.SequenceMatcher(None, stem, path.stem.lower()).ratio(), path)
                      for folder in search_dirs(db_path) for path in _entries(folder)
                      if path.is_file() and path.suffix.lower() in ALLOWED_SUFFIXES and _inside(path, folder)
-                     and (not suffix or path.suffix.lower() == suffix)), key=lambda item: item[0], reverse=True)
+                     and (not suffix or path.suffix.lower() == suffix)
+                     and re.findall(r"\d+", path.stem) == re.findall(r"\d+", stem)),  # „2025“ ≠ „2026“
+                    key=lambda item: item[0], reverse=True)
     names = {p.name.lower() for _, p in scored}
     if scored and scored[0][0] >= 0.85 and (len(names) == 1 or scored[0][0] - max(
             r for r, p in scored if p.name.lower() != scored[0][1].name.lower()) >= 0.1):

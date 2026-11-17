@@ -213,7 +213,7 @@ class ProviderManager:
         if remaining is None or input_cost is None or not output_cost:
             return request.max_tokens
         allowed = int((remaining - input_cost) / output_cost * 1_000_000)
-        if allowed < MIN_OUTPUT_TOKENS:
+        if allowed < min(request.max_tokens, MIN_OUTPUT_TOKENS):  # z. B. Systemtest mit 64 Tokens
             raise CostLimitError(
                 f"Das Restbudget ({max(remaining, 0):.2f} $) reicht für keine sinnvolle weitere Anfrage mehr "
                 f"(geschätzt {input_cost:.2f} $ nur für die Eingabe). Die Anfrage wurde nicht gesendet; das Budget lässt "
