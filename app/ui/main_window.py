@@ -97,7 +97,10 @@ class Bridge(QObject):
     interactive = False
 
     def can_ask(self) -> bool:
-        return self.interactive
+        # Keine Rückfragen mehr – auch nicht bei geöffnetem Dashboard: Alt+W bzw. der Klick ist die Zustimmung.
+        # Eindeutige Schritte laufen nach geprüfter Sicherung; nicht eindeutige werden als „blockiert“ markiert und
+        # alle unabhängigen Schritte laufen weiter (Rückmeldung im Fortschritt und im Verlauf, kein Pop-up).
+        return False
 
     def _ask(self, kind: str, payload: Any) -> Any:
         holder: dict[str, Any] = {}

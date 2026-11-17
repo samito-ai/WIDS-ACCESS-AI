@@ -137,7 +137,8 @@ def test_review_when_requirements_not_confirmed_and_destructive_stops(background
     record = window.ctx.storage.list_tasks(limit=1)[0]
     assert record.backup_path and Path(record.backup_path).exists(), "Sicherung trotzdem erstellt"
 
-    provider.responses.append(solution([{"action": {"action": "delete_query", "name": "qryZwei"}}]))
+    provider.responses.append(solution([{"action": {"action": "delete_records", "table": "Kunden"}}],
+                                       task_type="data_editing"))
     window._on_hotkey("solve")
     qtbot.waitUntil(lambda: not window._busy and window._prepared is None and window.tray_state != "running", timeout=60000)
     record = window.ctx.storage.list_tasks(limit=1)[0]

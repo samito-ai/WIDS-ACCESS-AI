@@ -261,7 +261,7 @@ def test_overwrite_policy_never_replaces_in_background(make: Any) -> None:
 # --------------------------------------------------------------------------- Freigabe und Sicherheit
 def test_user_started_plan_runs_without_approval_but_destructive_asks(make: Any) -> None:
     """Kein Freigabesystem mehr: ein vom Benutzer gestarteter, nicht löschender Plan läuft ohne Rückfrage (mit
-    Sicherung). Löschende Pläne brauchen weiterhin die ausdrückliche Bestätigung."""
+    Sicherung). Eine eindeutige Löschung (benanntes, vorhandenes Objekt) läuft nach Sicherung ebenfalls ohne Rückfrage."""
     query = {"action": "create_query", "name": "qryDirekt", "sql": "SELECT Nachname FROM Kunden"}
     h = make([solution([query])])
     never = AutoInteraction(approve=False)  # würde ablehnen – darf gar nicht gefragt werden
@@ -270,8 +270,8 @@ def test_user_started_plan_runs_without_approval_but_destructive_asks(make: Any)
     h.provider.responses.append(solution([{"action": "delete_query", "name": "qryDirekt"}]))
     third = AutoInteraction(approve=False)
     _, outcome, _ = run(h, "Löschen Sie qryDirekt.", third)
-    assert len(third.requests) == 1 and outcome.status == "abgelehnt", "löschende Pläne brauchen weiter die Freigabe"
-    assert h.access.run(lambda e: e.queries.exists("qryDirekt"))
+    assert third.requests == [] and third.confirmations == [] and outcome.status == "erfolgreich", outcome.error
+    assert not h.access.run(lambda e: e.queries.exists("qryDirekt")) and Path(outcome.backup_path).exists()
 
 
 def test_same_plan_is_never_executed_twice(make: Any) -> None:
@@ -286,8 +286,8 @@ def test_same_plan_is_never_executed_twice(make: Any) -> None:
 
 
 def test_rejected_plan_changes_nothing(make: Any) -> None:
-    """Ein löschender Plan wird im Dashboard nachgefragt – abgelehnt ändert er nichts (auch keine Sicherung)."""
-    delete = solution([{"action": {"action": "delete_records", "table": "Bestellungen", "where": "Menge > 0"}}],
+    """Eine NICHT eindeutige Löschung (alle Datensätze) läuft nie automatisch; abgelehnt ändert sie nichts."""
+    delete = solution([{"action": {"action": "delete_records", "table": "Bestellungen"}}],
                       task_type="data_editing")
     h = make([delete])
     before = h.access.run(lambda e: e.tables.count_records("Bestellungen"))
@@ -302,10 +302,11 @@ def test_missing_practice_confirmation_blocks(make: Any) -> None:
     h = make([solution([QUERY_TIROL])])
     _, outcome, _ = run(h, TASK_TIROL, AutoInteraction(practice_confirmed=False))
     assert outcome.status == "erfolgreich", "nicht löschender Plan: keine Rückfrage nötig"
-    h.provider.responses.append(solution([{"action": "delete_query", "name": "qryKundenTirol"}]))
-    _, outcome, _ = run(h, "Löschen Sie die Abfrage", AutoInteraction(practice_confirmed=False, confirm_destructive=True))
+    h.provider.responses.append(solution([{"action": {"action": "delete_records", "table": "Bestellungen"}}], task_type="data_editing"))
+    before = h.access.run(lambda e: e.tables.count_records("Bestellungen"))
+    _, outcome, _ = run(h, "Löschen Sie alle Bestellungen", AutoInteraction(practice_confirmed=False, confirm_destructive=True))
     assert outcome.status == "blockiert"
-    assert h.access.run(lambda e: e.queries.exists("qryKundenTirol")) is True
+    assert h.access.run(lambda e: e.tables.count_records("Bestellungen")) == before
 
 
 def test_exam_environment_blocks_automation(make: Any) -> None:
@@ -330,7 +331,9 @@ def test_destructive_steps_need_separate_confirmation(make: Any) -> None:
         {"action": "delete_records", "table": "Bestellungen", "where": "Menge >= 3"},
         {"action": "create_query", "name": "qryRest", "sql": "SELECT * FROM Bestellungen"},
     ]
-    h = make([solution(steps, task_type="data_editing"), solution(steps, task_type="data_editing")])
+    # 3 Treffer über der (hier niedrigen) Mengengrenze: nicht eindeutig genug für den Automatikweg → Rückfrage
+    h = make([solution(steps, task_type="data_editing"), solution(steps, task_type="data_editing")],
+             security__mass_change_threshold=2)
     # abgelehnt -> Schritt übersprungen, Daten unverändert, restlicher Plan läuft weiter
     _, outcome, interaction = run(h, "Löschen Sie alle Bestellungen mit Menge ab 3 ...", AutoInteraction(confirm_destructive=False))
     assert interaction.confirmations[0][0] == 1 and "3 Datensätze" in interaction.confirmations[0][1]
@@ -360,10 +363,10 @@ def test_mass_change_asks_with_exact_count(make: Any) -> None:
     class Recorder(AutoInteraction):
         def confirm_step(self, step: Any, reason: str) -> bool:
             self.confirmations.append((step.id, reason))
-            return len(self.confirmations) == 1  # destruktiv: ja – Massenänderung: nein
+            return False  # Massenänderung über der Grenze: nein
 
     _, outcome, interaction = run(h, "Führen Sie die Aktualisierungsabfrage aus", Recorder())
-    assert len(interaction.confirmations) == 2 and "12 Datensätze" in interaction.confirmations[1][1]
+    assert len(interaction.confirmations) == 1 and "12 Datensätze" in interaction.confirmations[0][1]
     assert outcome.results[0].status == "skipped"
     assert h.access.run(lambda e: e.tables.count_records("Kunden", "Newsletter = True")) == 7, "zurückgerollt"
 
@@ -1094,8 +1097,7 @@ def test_switching_exercises_in_background_needs_no_approval(make: Any, sample_d
 
 def test_background_never_asks_and_never_bypasses_a_destructive_step(make: Any) -> None:
     """Ohne Dashboard: löschender Plan → angehalten. Keine Rückfrage, nichts wird automatisch bejaht."""
-    delete = solution([{"action": {"action": "delete_records", "table": "Bestellungen", "where": "Menge > 0"}}],
-                      task_type="data_editing")
+    delete = solution([{"action": {"action": "delete_records", "table": "Bestellungen"}}], task_type="data_editing")
     h = make([delete])
     background = AutoInteraction(interactive=False, confirm_destructive=True)
     before = h.access.run(lambda e: e.tables.count_records("Bestellungen"))
@@ -1230,8 +1232,7 @@ def test_task_binding_ends_with_the_task_and_costs_are_per_task(make: Any) -> No
 GOLF_STEPS = [
     {"title": "Kunden ergänzen", "action": {"action": "insert_records", "table": "Kunden",
                                             "records": [{"Nachname": "Ergänzt", "Ort": "Bruchsal"}]}},
-    {"title": "Bestellungen ohne Menge löschen", "action": {"action": "delete_records", "table": "Bestellungen",
-                                                            "where": "Menge > 0"}},
+    {"title": "Alle Bestellungen löschen", "action": {"action": "delete_records", "table": "Bestellungen"}},
     {"title": "Abfrage nach Ort", "action": {"action": "create_query", "name": "qryBruchsal",
                                              "sql": "SELECT Nachname FROM Kunden WHERE Ort='Bruchsal'"}},
 ]
@@ -1318,7 +1319,7 @@ def test_steps_on_the_object_of_a_held_deletion_are_not_run(make: Any) -> None:
     """Review-Fund Beta 4: „alle Bestellungen löschen, dann neu erfassen“ – ohne Bestätigung der Löschung darf das
     Erfassen nicht laufen (sonst doppelte Datensätze). Unabhängige Schritte an anderen Objekten laufen weiter."""
     steps = [
-        {"title": "Bestellungen leeren", "action": {"action": "delete_records", "table": "Bestellungen", "where": "Menge > 0"}},
+        {"title": "Bestellungen leeren", "action": {"action": "delete_records", "table": "Bestellungen"}},
         {"title": "Bestellung neu erfassen", "action": {"action": "insert_records", "table": "Bestellungen",
                                                         "records": [{"KundenNr": 1, "ArtikelNr": 1, "Menge": 3}]}},
         {"title": "Abfrage Orte", "action": {"action": "create_query", "name": "qryOrte", "sql": "SELECT Ort FROM Kunden"}},
@@ -1421,8 +1422,9 @@ def test_practice_database_reinserts_when_rows_are_gone_and_keeps_confirmation_f
         return m.PlanStep.model_validate({"id": 1, "title": "t", "action": spec})
 
     db = h.access.path
-    assert not h.pipeline._auto_allowed(step({"action": "delete_table", "name": "Bestellungen"}), db)
-    assert not h.pipeline._auto_allowed(step({"action": "run_action_query", "sql": "DELETE FROM Bestellungen"}), db)
+    assert h.pipeline._auto_allowed(step({"action": "delete_table", "name": "Bestellungen"}), db), "benannt, lokal"
+    assert not h.pipeline._auto_allowed(step({"action": "delete_table", "name": "Gibtsnicht"}), db), "Ziel unbekannt"
+    assert not h.pipeline._auto_allowed(step({"action": "delete_records", "table": "Bestellungen"}), db), "alle"
     assert h.pipeline._auto_allowed(step({"action": "delete_records", "table": "Bestellungen", "where": "Menge = 99"}), db)
     real = h.access.schema
     schema = real(refresh=True).model_copy(deep=True)

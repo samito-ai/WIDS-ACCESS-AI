@@ -998,26 +998,37 @@ class TaskPipeline:
         ), merged
 
     def _auto_allowed(self, step: m.PlanStep, db_path: str) -> bool:
-        """Darf dieser löschende Schritt ohne Rückfrage laufen? Nur in einer autorisierten Übungsdatenbank (te.comp-
-        Übungsordner oder WIDS-Arbeitskopie), nur mit Sicherung, und bei Datensätzen nur mit Bedingung und höchstens so
-        vielen Treffern wie die Mengengrenze erlaubt. Eigene/unbekannte Dateien: weiterhin Bestätigung."""
-        from app.vision import tecomp
+        """Darf dieser löschende Schritt ohne Rückfrage laufen? Alt+W ist die Zustimmung für die geöffnete Übung; der
+        Schutz ist technisch: Sicherung vorher (geprüft), eindeutiges Ziel, Mengengrenze, nur Objekte IN der Datei.
 
+        - Datensätze löschen/überschreiben: nur mit Bedingung und höchstens ``mass_change_threshold`` Treffern.
+        - Aktionsabfragen: die Mengengrenze prüft die Ausführung selbst (darüber: Rücknahme, Schritt blockiert).
+        - Tabelle/Feld/Abfrage/Objekt löschen, Typänderung: nur, wenn das genannte Objekt existiert und lokal ist.
+        Alles andere (keine Bedingung, zu viele Treffer, verknüpfte Tabelle, Ziel unbekannt) → nur dieser Schritt
+        wird blockiert, die übrigen laufen weiter."""
         if not self.settings.security.always_backup:
             return False
-        if not (tecomp.is_tecomp_exercise(db_path) or self._backups.is_working_copy(db_path)):
-            return False
         action = step.action
-        if not isinstance(action, m.DeleteRecords | m.UpdateRecords) or not action.where:
-            # Tabelle/Feld löschen, verlustbehaftete Typänderung, Aktionsabfragen, „alle Datensätze“: immer Bestätigung
-            return False
         try:
-            table = self._access.schema().table(action.table)
-            count = self._access.run(lambda e: e.tables.count_records(action.table, action.where))
+            schema = self._access.schema()
+            if isinstance(action, m.DeleteRecords | m.UpdateRecords):
+                table = schema.table(action.table)
+                if not action.where or table is None or table.linked:
+                    return False
+                count = self._access.run(lambda e: e.tables.count_records(action.table, action.where))
+                return count <= self._policy.mass_change_threshold
+            if isinstance(action, m.RunActionQuery):
+                return True
+            if isinstance(action, m.DeleteTable):
+                table = schema.table(action.name)
+                return table is not None and not table.linked
+            if isinstance(action, m.RemoveField | m.ChangeFieldType):
+                table = schema.table(action.table)
+                return table is not None and not table.linked and table.field(action.field) is not None
         except WidsError:
             return False
-        # verknüpfte Tabellen liegen außerhalb der Übungsdatei – und außerhalb ihrer Sicherung
-        return table is not None and not table.linked and count <= self._policy.mass_change_threshold
+        # Abfrage/Formular/Bericht/Index/Beziehung löschen: benanntes Objekt – Prüfung „existiert“ übernimmt der Plan
+        return not isinstance(action, m.DeleteRecords | m.UpdateRecords)
 
     def _impact(self, step: m.PlanStep) -> tuple[str, bool]:
         """Beschreibt die Auswirkung eines destruktiven Schritts; ``True``, wenn die Anzahl exakt ist."""

@@ -131,13 +131,15 @@ def test_cancel_during_execution(app_window: Any, qtbot: Any, tmp_path: Path) ->
 def test_rejected_approval_and_chat(app_window: Any, qtbot: Any, tmp_path: Path) -> None:
     window, provider, _ = app_window
     window.ctx.access.create_database(str(tmp_path / "nein.accdb"), sampledb.populate)
-    provider.responses += [solution([{"action": {"action": "delete_table", "name": "Artikel"}}]),
+    provider.responses += [solution([{"action": {"action": "delete_records", "table": "Bestellungen"}}],
+                                    task_type="data_editing"),
                            "Ein **Primärschlüssel** identifiziert jeden Datensatz eindeutig."]
-    window._approval_dialog = lambda request: ApprovalDecision(approved=False)
-    window.task_text.setPlainText("Löschen Sie die Tabelle Artikel.")
+    window._approval_dialog = lambda request: pytest.fail("kein Freigabedialog mehr – auch nicht im Dashboard")
+    before = window.ctx.access.run(lambda e: e.tables.count_records("Bestellungen"))
+    window.task_text.setPlainText("Löschen Sie alle Bestellungen.")
     window.analyze(execute=True)
-    qtbot.waitUntil(lambda: "Nicht freigegeben" in window.task_status.text(), timeout=60000)
-    assert window.ctx.access.run(lambda e: e.tables.table_exists("Artikel"))
+    qtbot.waitUntil(lambda: "blockiert" in window.task_status.text(), timeout=60000)
+    assert window.ctx.access.run(lambda e: e.tables.count_records("Bestellungen")) == before, "nicht eindeutig: nichts"
     window.nav.setCurrentRow(2)
     window.chat_input.setPlainText("Was ist ein Primärschlüssel?")
     window.send_chat()
@@ -159,8 +161,8 @@ def test_background_mode_opens_no_dialog_no_toast_and_keeps_red_dot(app_window: 
     dialogs: list[Any] = []
     window._approval_dialog = lambda request: dialogs.append(request) or ApprovalDecision(approved=True, practice_confirmed=True)
     window.ctx.access.create_database(str(tmp_path / "ruhe.accdb"), sampledb.populate)
-    provider.responses.append(solution([{"action": {"action": "delete_records", "table": "Bestellungen",
-                                                    "where": "Menge > 0"}}], task_type="data_editing"))
+    provider.responses.append(solution([{"action": {"action": "delete_records", "table": "Bestellungen"}}],
+                                       task_type="data_editing"))
     before = window.ctx.access.run(lambda e: e.tables.count_records("Bestellungen"))
     window.task_text.setPlainText("Löschen Sie alle Bestellungen mit einer Menge.")
     window.hide()
