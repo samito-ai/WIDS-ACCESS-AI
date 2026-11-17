@@ -3,6 +3,30 @@
 Alle wichtigen Änderungen an WIDS ACCESS AI. Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/),
 Versionen nach [Semantic Versioning](https://semver.org/lang/de/).
 
+## [1.0.0b4] – 2026-11-17
+
+### Neu
+- **Rechenfragen deterministisch** (`calculate_value`): WIDS rechnet den Ausdruck selbst exakt (Bruchrechnung,
+  kaufmännisch gerundet) und prüft ihn mit einem zweiten Rechenweg; jede Zahl muss in einem wörtlichen Zitat der
+  Aufgabe stehen, sonst wird nicht gerechnet. Nur Grundrechenarten, Potenzen mit kleinem Exponenten, `round` –
+  kein anderer Code, Größenbegrenzung gegen Speicherüberlauf.
+- **Antworten nur mit Beleg:** Theorie-/Multiple-Choice-Antworten mit gemeldeter Unsicherheit, ohne Begründung je
+  Option, ohne richtige Option, ohne Antwort oder mit offenen Fragen heißen „nicht gesichert“ (Status „unklar“,
+  roter Punkt) statt „beantwortet“.
+- **Freigegebene Lernordner** in den Einstellungen: nur lesend, nur namentlich genannte Dateien; Word-Dokumente
+  (.docx) als Lernunterlage; Laufwerke, System-, Programm- und Anmeldedaten-Ordner ausgeschlossen; nicht erreichbare
+  Netzlaufwerke blockieren nicht.
+- **Berichtslayout-Prüfung:** Spaltenlayout – Beschriftung links neben dem richtigen Feld, Felder in der verlangten
+  Reihenfolge; tabellarisch – Überschrift über ihrem Feld, Spaltenreihenfolge; keine Überlappung im Detailbereich.
+  Mehrspaltiger Druck wird weiterhin getrennt geprüft (Live-Fall „Students“).
+
+### Behoben
+- **Golfclubs-Fall:** Ein löschender Schritt sperrte im Hintergrund den ganzen Plan. Jetzt laufen unabhängige Schritte
+  (mit Sicherung und Prüfung), die Löschung wartet auf Bestätigung im Dashboard, das Ergebnis heißt „teilweise“ mit
+  konkretem Grund. Spätere Schritte am selben Objekt wie eine nicht ausgeführte Löschung werden ebenfalls nicht
+  ausgeführt (z. B. „alles löschen, dann neu importieren“ – sonst doppelte Daten). Reine Löschpläne bleiben angehalten.
+- Negativtest ergänzt: gespeicherte Abfrage ohne JOIN-Bedingung (Kreuzprodukt) wird abgelehnt.
+
 ## [1.0.0b3] – 2026-11-17
 
 ### Neu

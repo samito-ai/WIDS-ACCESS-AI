@@ -45,6 +45,7 @@ from PySide6.QtWidgets import (
 )
 
 from app import APP_NAME, __version__
+from app.access import importer
 from app.agent.explainer import STATUS_LABELS, analysis_markdown, plan_markdown
 from app.agent.orchestrator import ApprovalDecision, ApprovalRequest, PipelineEvent, PreparedTask, TaskOutcome
 from app.ai.base import ChatMessage
@@ -616,16 +617,23 @@ class MainWindow(QMainWindow):
             if self.ctx.access.is_connected:
                 tracker.mark("Datenbank verbunden")
             tracker.mark("KI analysiert Anforderungen")
+            # eine nicht belegte Antwort ist nie „beantwortet“: Grund sichtbar, Statuspunkt rot
+            unsure = "Antwort nicht gesichert – " + "; ".join(prepared.answer_issues) if prepared.answer_issues else ""
             if answered:
-                self._progress_end("Beantwortet – keine Änderungen an der Datenbank nötig.", "ok")
+                self._progress_end(unsure or "Beantwortet – keine Änderungen an der Datenbank nötig.",
+                                   "review" if unsure else "ok")
             elif execute and not self._cancel.is_set():
                 tracker.plan(len(prepared.solution.plan.steps))
                 self.live.render()
             else:
                 tracker.mark("Lösungsplan erstellt")
                 self._progress_end("Plan erstellt – wartet auf „Plan ausführen“.", "ok")
-            self.set_busy(False, "Beantwortet – keine Änderungen an der Datenbank nötig." if answered
-                          else "Plan erstellt. Mit „Plan ausführen“ freigeben.")
+            if answered and unsure:
+                self.set_busy(False, unsure, state="review")
+                self.compact.log.addItem(f"⚠ {unsure}")
+            else:
+                self.set_busy(False, "Beantwortet – keine Änderungen an der Datenbank nötig." if answered
+                              else "Plan erstellt. Mit „Plan ausführen“ freigeben.")
             if self._cancel.is_set():  # Abbruch während der Analyse: der fertige Plan wird NICHT ausgeführt
                 self._cancelled()
             elif execute and not answered:
@@ -1078,6 +1086,12 @@ class MainWindow(QMainWindow):
         self.set_diagnostic = QCheckBox("Diagnose im Bericht: Anforderung → Schritte → Prüfung (ohne KI-Anfrage)")
         self.set_diagnostic.setChecked(s.automation.diagnostic_report)
         form.addRow("", self.set_diagnostic)
+        self.set_folders = QPlainTextEdit("\n".join(s.automation.source_folders))
+        self.set_folders.setPlaceholderText(r"z. B. D:\Schule\Access-Unterlagen – je Zeile ein Ordner")
+        self.set_folders.setToolTip("Nur lesend. WIDS nutzt daraus nur Dateien, die die Aufgabe namentlich nennt "
+                                    "(Excel, Text, CSV, Word). System- und Anmeldedaten-Ordner sind ausgeschlossen.")
+        self.set_folders.setMaximumHeight(70)
+        form.addRow("Freigegebene Lernordner", self.set_folders)
         self.set_start_mode = QComboBox()
         for key, label in (("window", "Hauptfenster"), ("compact", "Kompaktfenster"), ("background", "Nur Infobereich (Hintergrund)")):
             self.set_start_mode.addItem(label, key)
@@ -1163,6 +1177,11 @@ class MainWindow(QMainWindow):
         except HotkeyError as exc:
             self.show_error(exc)
             return
+        folders = [line.strip() for line in self.set_folders.toPlainText().splitlines() if line.strip()]
+        problems = [p for p in map(importer.folder_problem, folders) if p]
+        if problems:
+            self.show_error(WidsError("Lernordner nicht gespeichert: " + "; ".join(problems)))
+            return
         if not self.save_key():  # ein eingegebener Schlüssel wird mitgespeichert
             return
         for name, combo in combos.items():
@@ -1175,6 +1194,7 @@ class MainWindow(QMainWindow):
         s.ai.use_vision = self.set_vision.isChecked()
         s.automation.check_requirements = self.set_check_req.isChecked()
         s.automation.diagnostic_report = self.set_diagnostic.isChecked()
+        s.automation.source_folders = folders
         s.ui.start_mode = self.set_start_mode.currentData()
         s.ui.show_overlay = self.set_overlay.isChecked()
         if self.set_autostart.isEnabled() and self.set_autostart.isChecked() != (autostart.get() is not None):

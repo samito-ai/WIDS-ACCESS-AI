@@ -1225,3 +1225,109 @@ def test_task_binding_ends_with_the_task_and_costs_are_per_task(make: Any) -> No
     assert ai.task_id is None, "Bindung nach der Ausführung gelöst"
     per_task = h.storage.usage_summary(task_id=prepared.task_id)
     assert per_task.requests >= 1 and per_task.cost_usd > 0
+
+
+GOLF_STEPS = [
+    {"title": "Kunden ergänzen", "action": {"action": "insert_records", "table": "Kunden",
+                                            "records": [{"Nachname": "Ergänzt", "Ort": "Bruchsal"}]}},
+    {"title": "Bestellungen ohne Menge löschen", "action": {"action": "delete_records", "table": "Bestellungen",
+                                                            "where": "Menge > 0"}},
+    {"title": "Abfrage nach Ort", "action": {"action": "create_query", "name": "qryBruchsal",
+                                             "sql": "SELECT Nachname FROM Kunden WHERE Ort='Bruchsal'"}},
+]
+
+
+def test_background_runs_independent_steps_when_a_deletion_awaits_approval(make: Any) -> None:
+    """Beta 4, Fall „Golfclubs“: ein bestätigungspflichtiger Löschschritt sperrt nicht mehr den ganzen Plan. Im
+    Hintergrund laufen die unabhängigen Schritte (geprüft), die Löschung wird NICHT ausgeführt, Status „teilweise“ mit
+    dem konkreten Grund – nie „erfolgreich“, keine Rückfrage, keine pauschale Freigabe."""
+    h = make([solution(GOLF_STEPS, task_type="data_editing")])
+    background = AutoInteraction(interactive=False, confirm_destructive=True)
+    before = h.access.run(lambda e: e.tables.count_records("Bestellungen"))
+    _, outcome, _ = run(h, "Ergänzen Sie den Kunden, löschen Sie die Bestellungen, erstellen Sie die Abfrage.", background)
+    assert outcome.status == "teilweise", outcome.error
+    assert "Schritt 2" in outcome.error and "Bestätigung" in outcome.error, outcome.error
+    assert h.access.run(lambda e: e.tables.count_records("Bestellungen")) == before, "nichts gelöscht"
+    assert h.access.run(lambda e: e.queries.run_select("qryBruchsal"))[1] == [["Ergänzt"]], "unabhängige Schritte liefen"
+    assert background.requests == [] and background.confirmations == []
+    assert {v.step_id for v in outcome.verifications if v.passed} == {1, 3}, "erledigte Schritte unabhängig geprüft"
+    assert outcome.backup_path, "Sicherung vor den Änderungen"
+
+
+def test_dashboard_declined_deletion_keeps_the_other_results(make: Any) -> None:
+    """Im Dashboard wird die konkrete Löschung einzeln bestätigt; abgelehnt → nur sie entfällt."""
+    h = make([solution(GOLF_STEPS, task_type="data_editing")])
+    dashboard = AutoInteraction(confirm_destructive=False)
+    before = h.access.run(lambda e: e.tables.count_records("Bestellungen"))
+    _, outcome, _ = run(h, "Ergänzen Sie den Kunden, löschen Sie die Bestellungen, erstellen Sie die Abfrage.", dashboard)
+    assert [c[0] for c in dashboard.confirmations] == [2], "nur die Löschung wird einzeln bestätigt"
+    assert outcome.status == "teilweise" and h.access.run(lambda e: e.tables.count_records("Bestellungen")) == before
+    assert h.access.run(lambda e: e.queries.exists("qryBruchsal"))
+
+
+# --------------------------------------------------------------------------- Beta 4: belegte Antworten
+CALC_TASK = "Ein Artikel kostet 240 €. Es gibt 15 % Rabatt. Wie hoch ist der Rabatt in Euro?"
+
+
+def _calc(expression: str, given: str = "Ein Artikel kostet 240 €. Es gibt 15 % Rabatt.") -> dict[str, Any]:
+    return {"title": "Rabatt berechnen", "action": {"action": "calculate_value", "question": "Rabatt in Euro?",
+                                                    "given": given, "expression": expression, "decimals": 2}}
+
+
+def test_calculation_question_is_computed_by_wids_and_verified_twice(make: Any) -> None:
+    h = make([solution([_calc("240 * 15 / 100")], task_type="theory", requirements=["Rabatt berechnen"])])
+    prepared, outcome, _ = run(h, CALC_TASK)
+    assert prepared.validation.ok
+    assert outcome.results[0].details["answer"] == "36,00"
+    checks = {c.name: c.passed for v in outcome.verifications for c in v.checks}
+    assert checks["Zweiter Rechenweg stimmt überein"] and checks["Zahlen aus den Angaben der Aufgabe"]
+    assert outcome.status in ("erfolgreich", "unklar"), outcome.error
+
+
+def test_calculation_with_invented_number_or_quote_is_never_run(make: Any) -> None:
+    """Eine erfundene Zahl bzw. ein Zitat, das nicht in der Aufgabe steht, wird nie gerechnet – auch nicht nach den
+    KI-Korrekturrunden (die Planprüfung schickt den Fehler zurück, die KI bleibt hier absichtlich dabei)."""
+    from app.core.errors import WidsError
+
+    for bad, expected in ((_calc("240 * 18 / 100"), "18"),
+                          (_calc("999 * 15 / 100", given="Ein Artikel kostet 999 €. Es gibt 15 % Rabatt."),
+                           "nicht in der Aufgabe")):
+        h = make([solution([bad], task_type="theory")] * 4)
+        try:
+            prepared, outcome, _ = run(h, CALC_TASK)
+        except WidsError as exc:  # Korrekturrunden erschöpft: Analyse bricht mit Begründung ab
+            assert expected in f"{exc.user_message} {exc.detail}", exc
+            continue
+        assert not prepared.validation.ok and outcome.status == "fehlgeschlagen" and expected in outcome.error
+        assert all("answer" not in r.details for r in outcome.results)
+
+
+def test_uncertain_multiple_choice_is_not_reported_as_answered(make: Any) -> None:
+    unsure = solution([], task_type="multiple_choice", multiple_choice={
+        "question": "Welche Farbe hat die Kopfzeile laut Abbildung?", "options": [
+            {"label": "A", "text": "Blau", "correct": True, "reason": "vermutet"},
+            {"label": "B", "text": "Grün", "correct": False, "reason": ""}],
+        "uncertainty": "Die Abbildung war nicht lesbar."})
+    h = make([unsure])
+    prepared, outcome, _ = run(h, "Welche Farbe hat die Kopfzeile laut Abbildung?\nA) Blau\nB) Grün")
+    assert prepared.answer_issues and outcome.status == "unklar", "nie „beantwortet“ ohne Beleg"
+    assert "Abbildung war nicht lesbar" in outcome.error and h.storage.get_task(prepared.task_id).status == "unklar"
+
+
+def test_steps_on_the_object_of_a_held_deletion_are_not_run(make: Any) -> None:
+    """Review-Fund Beta 4: „alle Bestellungen löschen, dann neu erfassen“ – ohne Bestätigung der Löschung darf das
+    Erfassen nicht laufen (sonst doppelte Datensätze). Unabhängige Schritte an anderen Objekten laufen weiter."""
+    steps = [
+        {"title": "Bestellungen leeren", "action": {"action": "delete_records", "table": "Bestellungen", "where": "Menge > 0"}},
+        {"title": "Bestellung neu erfassen", "action": {"action": "insert_records", "table": "Bestellungen",
+                                                        "records": [{"KundenNr": 1, "ArtikelNr": 1, "Menge": 3}]}},
+        {"title": "Abfrage Orte", "action": {"action": "create_query", "name": "qryOrte", "sql": "SELECT Ort FROM Kunden"}},
+    ]
+    h = make([solution(steps, task_type="data_editing")])
+    before = h.access.run(lambda e: e.tables.count_records("Bestellungen"))
+    _, outcome, _ = run(h, "Leeren Sie die Bestellungen, erfassen Sie die neue Bestellung, erstellen Sie qryOrte.",
+                        AutoInteraction(interactive=False, confirm_destructive=True))
+    assert outcome.status == "teilweise"
+    assert h.access.run(lambda e: e.tables.count_records("Bestellungen")) == before, "weder gelöscht noch ergänzt"
+    assert "setzt die nicht ausgeführte Löschung in Schritt 1 voraus" in outcome.error
+    assert h.access.run(lambda e: e.queries.exists("qryOrte")), "unabhängiger Schritt lief"

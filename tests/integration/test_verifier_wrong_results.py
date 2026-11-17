@@ -153,3 +153,16 @@ def test_primary_key_update_and_duplicate_headers_are_not_false_failures(engine:
     (db_dir / "Namen.csv").write_bytes(source.read_bytes())
     imp = _step({"action": "import_data", "file": "Namen.csv", "table": "Namen"})
     assert _failed(engine, imp, AccessExecutor().execute(engine, imp)) == []
+
+
+def test_missing_join_condition_is_rejected(engine: AccessEngine) -> None:
+    """Beta-4-Negativtest: verlangt ist Kunden ⋈ Bestellungen über KundenNr, gespeichert wurde ein Kreuzprodukt ohne
+    JOIN – gleiche Spalten, falsche Datensätze. Die Ergebnisprüfung muss das ablehnen."""
+    step = _step({"action": "create_query", "name": "qryKundenBestellungen", "spec": {
+        "tables": ["Kunden", "Bestellungen"],
+        "joins": [{"left_table": "Kunden", "right_table": "Bestellungen", "left_field": "KundenNr",
+                   "right_field": "KundenNr"}],
+        "fields": [{"table": "Kunden", "field": "Nachname"}, {"table": "Bestellungen", "field": "Menge"}]}})
+    engine.queries.create_query("qryKundenBestellungen",
+                                "SELECT Kunden.Nachname, Bestellungen.Menge FROM Kunden, Bestellungen")
+    assert "Ergebnis wie verlangt" in _failed(engine, step, StepResult(step_id=1, final_name="qryKundenBestellungen"))

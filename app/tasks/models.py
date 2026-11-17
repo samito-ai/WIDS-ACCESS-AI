@@ -616,6 +616,23 @@ class AnswerQuery(_Action):
         return "Frage"
 
 
+class CalculateValue(_Action):
+    """Rechenfrage OHNE Datenbankbezug („15 % von 240 €“): WIDS rechnet den Ausdruck selbst exakt aus – das Ergebnis
+    stammt nie aus einer Schätzung des Sprachmodells. Jede Zahl im Ausdruck muss in ``given`` stehen."""
+
+    action: Literal["calculate_value"] = "calculate_value"
+    RISK: ClassVar[Risk] = "safe"
+    question: str = Field(min_length=1, max_length=500)
+    #: wörtlicher Ausschnitt der Aufgabe mit allen gegebenen Zahlen
+    given: str = Field(min_length=1, max_length=1000)
+    #: nur Zahlen (Dezimalpunkt), + - * / ** %, Klammern, round(x, n)
+    expression: str = Field(min_length=1, max_length=300)
+    decimals: int | None = Field(default=None, ge=0, le=10)
+
+    def target(self) -> str:
+        return "Rechnung"
+
+
 def answer_summary(columns: list[str], rows: list[list[Any]], *, limit: int = 8) -> str:
     """Kurzfassung eines Abfrageergebnisses als Antwort (ein Wert, sonst die ersten Zeilen)."""
     if not rows:
@@ -739,6 +756,7 @@ Action = Annotated[
     | ModifyReport
     | ModifyForm
     | AnswerQuery
+    | CalculateValue
     | TransferObjects
     | AttachFiles
     | CreateNavigationForm
@@ -770,6 +788,7 @@ ACTION_LABELS: dict[str, str] = {
     "modify_report": "Bericht bearbeiten",
     "modify_form": "Formular bearbeiten",
     "answer_query": "Datenfrage beantworten",
+    "calculate_value": "Rechenfrage berechnen",
     "transfer_objects": "Objekte mit anderer Datenbank austauschen",
     "attach_files": "Dateien in Anlagefeld speichern",
     "create_navigation_form": "Navigationsformular erstellen",
@@ -806,6 +825,29 @@ class MultipleChoiceAnswer(BaseModel):
     @property
     def correct_labels(self) -> list[str]:
         return [o.label or o.text for o in self.options if o.correct]
+
+
+def answer_issues(analysis: Any) -> list[str]:
+    """Warum eine Antwort (Theorie, Multiple Choice) NICHT als gesichert gelten darf – leer = belegt.
+    Keine Antwort, keine als richtig belegte Option, Option ohne Begründung, gemeldete Unsicherheit, offene Fragen."""
+    issues: list[str] = []
+    mc = analysis.multiple_choice
+    question = analysis.task_type in (TaskType.THEORY, TaskType.MULTIPLE_CHOICE) or mc is not None or analysis.answer
+    if not question:
+        return []  # praktische Aufgabe ohne nötige Änderung: keine Frage, die belegt werden müsste
+    if mc is not None and mc.options:
+        if not any(o.correct for o in mc.options):
+            issues.append("keine Antwortmöglichkeit als richtig belegt")
+        unexplained = [o.label or o.text[:30] for o in mc.options if not o.reason.strip()]
+        if unexplained:
+            issues.append("nicht jede Antwortmöglichkeit einzeln begründet: " + ", ".join(unexplained))
+        if mc.uncertainty.strip():
+            issues.append(f"Unsicherheit: {mc.uncertainty.strip()}")
+    elif not analysis.answer.strip():
+        issues.append("keine Antwort ermittelt")
+    if analysis.open_questions:
+        issues.append("offene Fragen: " + "; ".join(analysis.open_questions))
+    return issues
 
 
 class TaskAnalysis(BaseModel):

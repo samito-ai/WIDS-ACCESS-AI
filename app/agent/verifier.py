@@ -159,6 +159,61 @@ def _same_row_rank(ctl: Any, wanted_left: int, controls: list[Any]) -> bool:
     return abs(ctl.left - (prev.left + prev.width + 57)) <= 60
 
 
+def _caption_key(text: str) -> str:
+    return "".join(ch for ch in text.lower() if ch.isalnum())
+
+
+def _check_report_layout(info: Any, spec: Any, v: Verification) -> None:
+    """Angeordnete Steuerelemente im gespeicherten Bericht nachmessen (Live-Fund „Students“: Felder vorhanden, aber
+    die Anordnung war nicht belegt). Spaltenlayout: je Feld die Beschriftung LINKS in derselben Zeile, Felder in der
+    verlangten Reihenfolge untereinander. Tabellarisch: Überschrift im Seitenkopf über ihrem Feld, Spalten von links
+    nach rechts in der verlangten Reihenfolge. In beiden Fällen keine überlappenden Steuerelemente im Detailbereich.
+    Mehrspaltiger DRUCK (Seite einrichten → Spalten) ist davon unabhängig und wird in ``_check_page`` geprüft."""
+    if spec.labels:
+        return
+    groups = {g.field.lower() for g in spec.group_by}
+    fields = [f for f in spec.fields if f.lower() not in groups] or list(spec.fields)
+    bound = (c.AC_TEXT_BOX, c.AC_COMBO_BOX, c.AC_CHECK_BOX)
+    boxes = {f: next((x for x in info.controls if x.section == c.AC_DETAIL and x.control_type in bound
+                      and x.control_source.strip("[]").lower() == f.lower()), None) for f in fields}
+    missing = [f for f, box in boxes.items() if box is None]
+    v.add("Felder im Detailbereich", not missing, ("fehlen: " + ", ".join(missing)) if missing else f"{len(fields)} Felder")
+    placed = [(f, box) for f, box in boxes.items() if box is not None]
+    labels = [x for x in info.controls if x.control_type == c.AC_LABEL]
+
+    def overlap(a0: int, a1: int, b0: int, b1: int) -> int:
+        return min(a1, b1) - max(a0, b0)
+
+    wrong: list[str] = []
+    if spec.layout == "columnar":
+        for f, box in placed:
+            if not any(lbl.section == c.AC_DETAIL and _caption_key(lbl.caption) == _caption_key(f)
+                       and lbl.left + lbl.width <= box.left + 30
+                       and overlap(lbl.top, lbl.top + lbl.height, box.top, box.top + box.height)
+                       >= min(lbl.height, box.height) // 2 for lbl in labels):
+                wrong.append(f)
+        v.add("Beschriftung links neben dem richtigen Feld", not wrong,
+              ("falsch: " + ", ".join(wrong)) if wrong else "alle Zeilen")
+        tops = [box.top for _, box in placed]
+        v.add("Felder untereinander in der verlangten Reihenfolge", tops == sorted(tops) and len(set(tops)) == len(tops),
+              " → ".join(f for f, _ in sorted(placed, key=lambda p: p[1].top)))
+    else:
+        for f, box in placed:
+            if not any(lbl.section == c.AC_PAGE_HEADER and _caption_key(lbl.caption) == _caption_key(f)
+                       and overlap(lbl.left, lbl.left + lbl.width, box.left, box.left + box.width)
+                       >= min(lbl.width, box.width) // 2 for lbl in labels):
+                wrong.append(f)
+        v.add("Spaltenüberschrift über dem richtigen Feld", not wrong,
+              ("falsch: " + ", ".join(wrong)) if wrong else "alle Spalten")
+        lefts = [box.left for _, box in placed]
+        v.add("Spalten in der verlangten Reihenfolge", lefts == sorted(lefts) and len(set(lefts)) == len(lefts),
+              " → ".join(f for f, _ in sorted(placed, key=lambda p: p[1].left)))
+    detail = [x for x in info.controls if x.section == c.AC_DETAIL]
+    clashes = _overlaps(detail, {x.name.lower() for x in detail})
+    v.add("Steuerelemente im Detailbereich überlappen nicht", not clashes,
+          "; ".join(f"{a} überdeckt {b}" for a, b in clashes[:5]) or "keine Überlappung")
+
+
 def _check_bound_fields(e: AccessEngine, kind: str, controls: list[Any], source: str, v: Verification) -> None:
     """Nach einem Wechsel der Datenquelle: Alle gebundenen Steuerelemente müssen ein Feld der neuen Quelle zeigen
     (sonst „#Name?“). Bei einer SELECT-Quelle ohne lesbare Feldliste wird nichts behauptet."""
@@ -564,6 +619,22 @@ class ResultVerifier:
         answer = m.answer_summary(columns, rows)
         v.add("Antwort erneut ermittelt", answer == r.details.get("answer"), answer[:200])
         v.info.update({"columns": columns, "sample_rows": rows[:10], "row_count": len(rows)})
+
+    def _verify_calculate_value(self, e: AccessEngine, a: m.CalculateValue, r: StepResult, v: Verification) -> None:
+        """Zwei Rechenwege (exakt und Gleitkomma) müssen dasselbe ergeben; jede Zahl stammt aus der Aufgabe."""
+        from app.agent import calc
+
+        unknown = calc.unknown_numbers(a.expression, a.given)
+        v.add("Zahlen aus den Angaben der Aufgabe", not unknown, ", ".join(unknown) or "alle belegt")
+        try:
+            exact, approx = calc.evaluate(a.expression), calc.evaluate_float(a.expression)
+        except calc.CalcError as exc:
+            v.add("Rechnung nachvollziehbar", False, str(exc))
+            return
+        v.add("Zweiter Rechenweg stimmt überein", abs(float(exact) - approx) <= 1e-9 * max(1.0, abs(approx)),
+              f"{float(exact)} / {approx}")
+        answer = calc.format_value(exact, a.decimals)
+        v.add("Antwort erneut ermittelt", answer == r.details.get("answer"), answer)
 
     def _verify_modify_form(self, e: AccessEngine, a: m.ModifyForm, r: StepResult, v: Verification) -> None:
         info = e.objects.inspect_form(a.name)
@@ -1048,6 +1119,7 @@ class ResultVerifier:
         for ctl in spec.controls:
             if ctl.type == "text_box" and ctl.expression:
                 v.add(f"Steuerelement {ctl.expression}", ctl.expression.replace(" ", "").lower() in expressions)
+        _check_report_layout(info, spec, v)
         _check_page(e, name, spec.page_setup, spec.labels, spec.record_source, v)
 
     def _verify_rename_object(self, e: AccessEngine, a: m.RenameObject, r: StepResult, v: Verification) -> None:

@@ -1,6 +1,6 @@
 # WIDS ACCESS AI
 
-**Version 1.0.0 Beta 3** · Windows · Microsoft Access · Anthropic Claude · kostenlos, Open Source ([MIT](LICENSE))
+**Version 1.0.0 Beta 4** · Windows · Microsoft Access · Anthropic Claude · kostenlos, Open Source ([MIT](LICENSE))
 
 > KI-Assistent für Microsoft-Access-**Übungen**: Aufgabe erkennen → Lösung planen → Sicherung → in Access ausführen →
 > jede Anforderung unabhängig prüfen → Diagnosebericht. Funktioniert mit jeder Access-Datei, egal wie sie heißt.
@@ -30,6 +30,16 @@
 - **Keine Freigaben mehr nötig:** Alt+W ist die bewusste Aktion des Benutzers – kein Freigeben von
   Lernprogrammen, Workshops oder Dateien, keine Ablaufzeiten. Prüfungsschutz, Sicherung vor jeder Änderung und
   die Bestätigung löschender Schritte bleiben
+- **Belegte Antworten:** Datenfragen werden mit einer nur lesenden Abfrage aus der Datenbank beantwortet und
+  erneut nachgeprüft; Rechenfragen rechnet WIDS selbst exakt (kaufmännisch gerundet, zweiter Rechenweg zur Kontrolle),
+  jede Zahl muss in der Aufgabe stehen. Multiple Choice: jede Option einzeln begründet – eine unsichere oder nicht
+  begründete Antwort gilt als „nicht gesichert“ (roter Punkt), nie als beantwortet
+- **Mehrteilige Aufgaben ohne Blockade:** Ein bestätigungspflichtiger Löschschritt hält nur sich selbst (und spätere
+  Schritte am selben Objekt) an; unabhängige Schritte laufen und werden geprüft, das Ergebnis heißt „teilweise“
+- **Berichtslayout nachgemessen:** Beschriftung links neben dem richtigen Feld, Reihenfolge, keine Überlappung;
+  Steuerelementlayout und mehrspaltiger Druck werden getrennt geprüft
+- **Freigegebene Lernordner** (Einstellungen): nur lesend, nur Dateien, die die Aufgabe namentlich nennt (Excel, Text,
+  CSV, Word); System- und Anmeldedaten-Ordner sind ausgeschlossen
 - **System & KI testen** (Dashboard): kostenloser Teil auf einer temporären Testdatenbank (Access, COM/DAO,
   Erkennung, sicherer Testplan, unabhängige Prüfung, Sicherung); der KI-Teil (höchstens 0,01 $) startet erst nach
   Bestätigung. Ergebnis: Bestanden, Teilweise oder Fehlgeschlagen mit konkreter Ursache
@@ -52,8 +62,9 @@
 3. Starten. Die EXE ist **nicht signiert** – Windows SmartScreen kann warnen („Weitere Informationen“ →
    „Trotzdem ausführen“).
 
-**Updates:** Ab Beta 3 meldet das Dashboard neue Versionen und installiert sie nach Zustimmung selbst. Wer noch
-Beta 1 oder Beta 2 nutzt, lädt Beta 3 **einmal von Hand** herunter (alte Instanz über das Infobereich-Symbol beenden,
+**Updates:** Ab Beta 3 meldet das Dashboard neue Versionen und installiert sie nach Zustimmung selbst – Beta 3 →
+Beta 4 also über „Update installieren“. Wer noch Beta 1 oder Beta 2 nutzt, lädt die aktuelle Version **einmal von
+Hand** herunter (alte Instanz über das Infobereich-Symbol beenden,
 EXE ersetzen) – Einstellungen, Schlüssel und Verlauf bleiben erhalten.
 
 Voraussetzungen: Windows 10/11, Microsoft Access (Desktop), ein eigener Anthropic-API-Schlüssel.

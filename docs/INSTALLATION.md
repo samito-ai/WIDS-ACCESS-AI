@@ -18,6 +18,13 @@
 4. Optional im Dashboard **„System & KI testen“** klicken: zuerst ein kostenloser Test auf einer temporären
    Testdatenbank, danach – nur nach Bestätigung – ein KI-Test mit höchstens 0,01 $.
 
+### Freigegebene Lernordner (optional)
+Unter **Einstellungen → Freigegebene Lernordner** lassen sich Ordner mit eigenen Unterlagen eintragen (je Zeile ein
+vollständiger Pfad, auch Netzlaufwerke). WIDS liest dort **nur** Dateien, die eine Aufgabe namentlich nennt – Excel,
+Text, CSV (z. B. für Importe) und Word-Dokumente (als Quelle für Fragen). Es wird nichts verändert und nicht der ganze
+Ordner übertragen; an die KI gehen nur die ersten Zeilen bzw. ein gekürzter Text der genannten Datei. Ganze Laufwerke,
+Windows-, Programm- und Anmeldedaten-Ordner werden abgewiesen.
+
 ### Updates
 Ab Beta 3 prüft WIDS beim Start (still, ohne Internet einfach nicht) die Releases dieses Repositorys. Eine neue Version
 erscheint im Dashboard unter „System, Updates & Diagnose“; **„Update installieren“** lädt die EXE erst nach Zustimmung,

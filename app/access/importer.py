@@ -21,6 +21,13 @@ from app.access.specs import FieldSpec
 from app.core.errors import AccessError, ObjectNotFoundError
 
 ALLOWED_SUFFIXES = (".txt", ".csv", ".tab", ".xlsx", ".xls")
+#: Lernunterlagen, deren Text (gekürzt) als Quelle für Fragen dient – nie importiert, nie verändert
+MATERIAL_SUFFIXES = (".docx", ".md")
+#: vom Benutzer freigegebene Ordner (Einstellungen → Lernordner); nur lesend, siehe ``set_user_folders``
+_USER_FOLDERS: list[Path] = []
+#: nie als Quelle: System-, Programm- und Anmeldedaten-Ordner
+_FORBIDDEN = ("\\windows", "\\program files", "\\programdata", "\\appdata\\roaming\\microsoft",
+              "\\appdata\\local\\microsoft", "\\.ssh", "\\.aws", "\\.azure")
 _NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 _REL = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
 _EXCEL_EPOCH = dt.datetime(1899, 12, 30)
@@ -28,10 +35,31 @@ _DATE_FORMAT_IDS = {14, 15, 16, 17, 18, 19, 20, 21, 22, 45, 46, 47}
 
 
 # --------------------------------------------------------------------------- Quelldatei finden
-def search_dirs(db_path: str) -> list[Path]:
-    """Orte, an denen Quelldateien einer Übung liegen (te.comp-Übungsordner zuerst)."""
+def folder_problem(folder: str) -> str:
+    """Grund, warum ein Ordner nicht als Lernordner freigegeben werden darf (leer = zulässig)."""
+    path = Path(folder.strip().strip('"'))
+    if not path.is_absolute():
+        return f"„{folder}“: bitte einen vollständigen Pfad angeben"
+    lowered = str(path).lower().rstrip("\\")
+    if len(lowered) <= 3:
+        return f"„{folder}“: ein ganzes Laufwerk wird nicht freigegeben – bitte einen Ordner wählen"
+    if any(part in lowered + "\\" for part in _FORBIDDEN):
+        return f"„{folder}“: System-, Programm- oder Anmeldedaten-Ordner sind ausgeschlossen"
+    return ""
 
-    return tecomp_dirs(db_path) + ([Path(db_path).parent] if db_path and Path(db_path).parent.is_dir() else [])
+
+def set_user_folders(folders: list[str]) -> None:
+    """Freigegebene Lernordner übernehmen (nur zulässige; Erreichbarkeit wird bei jeder Suche mit Zeitlimit geprüft)."""
+    _USER_FOLDERS[:] = [Path(f.strip().strip('"')) for f in folders if f.strip() and not folder_problem(f)]
+
+
+def search_dirs(db_path: str) -> list[Path]:
+    """Orte, an denen Quelldateien einer Übung liegen (te.comp-Übungsordner zuerst, dann der Ordner der Datenbank,
+    dann die vom Benutzer freigegebenen Lernordner – ein nicht erreichbares Netzlaufwerk blockiert nicht)."""
+    from app.vision.tecomp import reachable
+
+    own = [Path(db_path).parent] if db_path and Path(db_path).parent.is_dir() else []
+    return tecomp_dirs(db_path) + own + [d for d in _USER_FOLDERS if d not in own and reachable(d)]
 
 
 def tecomp_dirs(db_path: str) -> list[Path]:
@@ -90,13 +118,13 @@ def resolve_source(name: str, db_path: str) -> Path:
     raise ObjectNotFoundError("Datei", name)
 
 
-def mentioned_sources(task_text: str, db_path: str) -> list[Path]:
+def mentioned_sources(task_text: str, db_path: str, suffixes: tuple[str, ...] = ALLOWED_SUFFIXES) -> list[Path]:
     """Quelldateien der Übung, die in der Aufgabenstellung genannt werden."""
     text = task_text.lower()
     found: list[Path] = []
-    for folder in search_dirs(db_path):  # te.comp-Ordner und der Ordner der Datenbank (nur namentlich genannte Dateien)
+    for folder in search_dirs(db_path):  # bekannte Orte, nur namentlich genannte Dateien – keine Laufwerkssuche
         for path in _entries(folder):
-            if path.is_file() and path.suffix.lower() in ALLOWED_SUFFIXES and re.search(
+            if path.is_file() and path.suffix.lower() in suffixes and re.search(
                 rf"(?<![\w]){re.escape(path.stem.lower())}(?![\w])", text) and path not in found:
                 found.append(path)
     return found
@@ -358,6 +386,19 @@ def excel_serial_to_datetime(value: Any) -> Any:
 
 
 # --------------------------------------------------------------------------- Vorschau für die KI
+def material_text(path: Path, limit: int = 4000) -> str:
+    """Text einer Lernunterlage (Word .docx bzw. Markdown), gekürzt – nur lesend, ohne Zusatzpakete."""
+    if path.suffix.lower() == ".docx":
+        with zipfile.ZipFile(path) as archive:
+            root = ElementTree.fromstring(archive.read("word/document.xml"))
+        ns = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+        paragraphs = ["".join(t.text or "" for t in p.iter(f"{ns}t")) for p in root.iter(f"{ns}p")]
+        text = "\n".join(p for p in paragraphs if p.strip())
+    else:
+        text = _decode(path.read_bytes())
+    return text[:limit] + (" …(gekürzt)" if len(text) > limit else "")
+
+
 def preview(path: Path, max_rows: int = 6, whole_up_to: int = 30) -> str:
     """Kurzbeschreibung einer Quelldatei: Format, Trennzeichen und die ersten Zeilen (gekürzt).
     Kleine Dateien (bis ``whole_up_to`` Zeilen, z. B. eine Liste für ein Nachschlagefeld) erscheinen vollständig."""

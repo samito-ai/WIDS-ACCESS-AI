@@ -15,11 +15,12 @@ from app.access.models import DatabaseSchema
 from app.access.naming import unique_name
 from app.access.service import AccessService
 from app.access.sqlbuilder import classify_sql, ensure_single_statement
+from app.agent import calc
 from app.agent.analyzer import TaskAnalyzer
 from app.agent.diff import missing_named_objects, schema_diff
 from app.agent.executor import AccessExecutor, ExecOptions, StepResult
 from app.agent.explainer import build_report
-from app.agent.planner import PlanValidator, ValidationReport
+from app.agent.planner import PlanIssue, PlanValidator, ValidationReport
 from app.agent.recovery import RecoveryManager, RecoveryState
 from app.agent.verifier import ResultVerifier, Verification
 from app.core.errors import (
@@ -120,7 +121,7 @@ def _data_target(step: m.PlanStep) -> str:
     return step.action.target().split(" → ")[-1].split(".")[0].strip().lower()
 
 
-_NO_DIALOG = "Angehalten (Hintergrundbetrieb, keine Rückfrage möglich – im Dashboard erneut starten): "
+_NO_DIALOG = "Wartet auf Bestätigung (Hintergrundbetrieb, keine Rückfrage möglich – im Dashboard erneut starten): "
 
 
 def _can_ask(interaction: Any) -> bool:
@@ -149,6 +150,8 @@ class PreparedTask(BaseModel):
     validation: ValidationReport
     db_path: str = ""
     warnings: list[str] = Field(default_factory=list)
+    #: Gründe, warum eine reine Antwort (Theorie/Multiple Choice) nicht als gesichert gilt – leer = belegt
+    answer_issues: list[str] = Field(default_factory=list)
 
 
 class TaskOutcome(BaseModel):
@@ -242,7 +245,7 @@ class TaskPipeline:
         for v in verifications:
             step = steps.get(v.step_id)
             action = step.action if step else None
-            if v.passed and isinstance(action, m.AnswerQuery):
+            if v.passed and isinstance(action, m.AnswerQuery | m.CalculateValue):
                 answer = next((c.detail for c in v.checks if c.name == "Antwort erneut ermittelt"), "")
                 lines.append(f"Schritt {v.step_id}: Frage „{action.question}“ per Abfrage beantwortet – Ergebnis: {answer}")
                 continue
@@ -275,7 +278,19 @@ class TaskPipeline:
                 previews.append(importer.preview(path))
             except Exception as exc:  # eine unlesbare Datei darf die Analyse nicht verhindern
                 log.warning("Vorschau von %s nicht möglich: %s", path.name, exc)
-        return ("QUELLDATEIEN (im te.comp-Übungsordner, für import_data):\n" + "\n".join(previews)) if previews else ""
+        materials = []
+        for path in importer.mentioned_sources(task_text, db_path, importer.MATERIAL_SUFFIXES)[:2]:
+            try:
+                materials.append(f"--- {path.name} ---\n{importer.material_text(path)}")
+            except Exception as exc:
+                log.warning("Lernunterlage %s nicht lesbar: %s", path.name, exc)
+        parts = []
+        if previews:
+            parts.append("QUELLDATEIEN (Übungs-/Lernordner, für import_data):\n" + "\n".join(previews))
+        if materials:
+            parts.append("LERNUNTERLAGEN (in der Aufgabe genannt, nur lesend – Antworten daraus belegen):\n"
+                         + "\n".join(materials))
+        return "\n\n".join(parts)
 
     # ------------------------------------------------------------------ Phase 1: verstehen und planen
     def prepare(self, task: m.CapturedTask, *, cancel: threading.Event | None = None) -> PreparedTask:
@@ -311,12 +326,17 @@ class TaskPipeline:
             self._storage.update_task(task_id, status="fehlgeschlagen", error=exc.user_message, finished_at=now_iso())
             self._storage.add_task_event(task_id, "error", exc.user_message, {"detail": exc.detail or ""})
             raise
-        status = "geplant" if not solution.plan.is_empty else "beantwortet"
+        for step in solution.plan.steps:  # Rechenfrage: die Zahlen müssen wörtlich aus DIESER Aufgabe stammen
+            if isinstance(step.action, m.CalculateValue) and not calc.quoted_in(step.action.given, task.text):
+                validation.issues.append(PlanIssue(step_id=step.id, severity="error", message=(
+                    "Die angegebenen Zahlen stehen so nicht in der Aufgabe – die Rechnung wird nicht ausgeführt.")))
+        issues = m.answer_issues(solution.analysis) if solution.plan.is_empty else []
+        status = "geplant" if not solution.plan.is_empty else ("unklar" if issues else "beantwortet")
         report = ""
         if solution.plan.is_empty:
             report = build_report(
                 task_text=task.text, solution=solution, validation=validation, results=[], verifications=[],
-                status="beantwortet", db_path=db_path, capture_method=task.method,
+                status=status, db_path=db_path, capture_method=task.method,
             )
         self._storage.update_task(
             task_id,
@@ -327,6 +347,7 @@ class TaskPipeline:
             plan_json=solution.plan.model_dump_json(),
             report_md=report or None,
             finished_at=now_iso() if solution.plan.is_empty else None,
+            error=("Antwort nicht gesichert: " + "; ".join(issues)) if issues else None,
         )
         return PreparedTask(
             task_id=task_id,
@@ -335,7 +356,8 @@ class TaskPipeline:
             solution=solution,
             validation=validation,
             db_path=db_path,
-            warnings=warnings,
+            warnings=[*warnings, *(f"Antwort nicht gesichert: {i}" for i in issues)],
+            answer_issues=issues,
         )
 
     # ------------------------------------------------------------------ Phase 2: freigeben, ausführen, prüfen
@@ -415,6 +437,8 @@ class TaskPipeline:
             interaction.on_event(PipelineEvent(kind=kind, message=message, step_id=step_id, data=data))
 
         if solution.plan.is_empty:
+            if prepared.answer_issues:
+                return finish("unklar", "Antwort nicht gesichert: " + "; ".join(prepared.answer_issues))
             return finish("beantwortet")
         record = self._storage.get_task(task_id)
         if record is not None and record.status not in ("geplant", "erkannt"):
@@ -451,10 +475,15 @@ class TaskPipeline:
             # weitere Rückfrage. Prüfungsschutz (oben) und Sicherung (unten) gelten unverändert.
             event("log", "Vom Benutzer gestartet – nicht löschende Schritte ohne Rückfrage.", db=db_path)
         elif not _can_ask(interaction):
-            # Hintergrundbetrieb: kein Dialog öffnet sich von selbst. Löschende Schritte = anhalten, nie automatisch.
+            # Hintergrundbetrieb: kein Dialog öffnet sich von selbst – löschende Schritte werden NIE automatisch
+            # ausgeführt. Unabhängige, nicht löschende Schritte laufen trotzdem (Live-Fund „Golfclubs“: ein einzelner
+            # Löschschritt sperrte den ganzen Plan); das Ergebnis bleibt „teilweise“, bis die Löschung bestätigt ist.
             reason = "Der Plan enthält löschende Schritte – die werden nur bei geöffnetem Dashboard bestätigt."
-            event("log", reason)
-            return finish("blockiert", reason)
+            if len(destructive) == len(solution.plan.steps):
+                event("log", reason)
+                return finish("blockiert", reason)
+            event("log", f"{len(destructive)} löschende(r) Schritt(e) warten auf Bestätigung im Dashboard – die übrigen "
+                         "Schritte werden ausgeführt.")
         else:
             decision = interaction.approve_plan(request)
             if not decision.approved:
@@ -490,6 +519,9 @@ class TaskPipeline:
         try:
             # mit Details, wenn Formulare/Berichte geändert werden: sonst fehlen deren Änderungen im Bericht
             before = self._access.schema(refresh=True, detailed_objects=needs_detail)
+            #: Objekt → Schritt einer NICHT ausgeführten Löschung: spätere Schritte am selben Objekt setzen sie voraus
+            #: (z. B. „alle löschen, dann neu importieren“ ergäbe sonst doppelte Datensätze)
+            held: dict[str, int] = {}
             for step in solution.plan.steps:
                 if cancel.is_set():
                     raise TaskCancelledError()
@@ -497,7 +529,11 @@ class TaskPipeline:
                 # Gegen den TATSÄCHLICHEN Zustand prüfen: verhindert Folgefehler nach einem gescheiterten Schritt
                 current = self._access.schema(refresh=True)
                 check = self._validator.validate(m.ExecutionPlan.model_construct(steps=[step], notes=[]), current)
-                if check.errors:
+                target = step.action.target().lower().split(".")[0]
+                if target in held:
+                    result = StepResult(step_id=step.id, status="skipped", message=(
+                        f"Übersprungen: setzt die nicht ausgeführte Löschung in Schritt {held[target]} voraus"))
+                elif check.errors:
                     result = StepResult(step_id=step.id, status="skipped",
                                         message="Übersprungen, passt nicht mehr zur Datenbank: " + check.errors[0].message)
                 else:
@@ -513,6 +549,8 @@ class TaskPipeline:
                 results.append(result)
                 self._access.invalidate_schema()
                 if result.status == "skipped":
+                    if self._risk(step) == "destructive":
+                        held.setdefault(target, step.id)
                     event("step_skipped", result.message, step.id)
                     continue
                 if result.status == "failed":
@@ -564,7 +602,8 @@ class TaskPipeline:
             names = "; ".join(f"Schritt {v.step_id}: {', '.join(c.name for c in v.failed_checks)}" for v in unverified)
             return finish("teilweise", f"Die Ergebnisprüfung hat Abweichungen gefunden – {names}")
         if skipped:
-            return finish("teilweise", f"{len(skipped)} Schritt(e) wurden nicht ausgeführt.")
+            return finish("teilweise", f"{len(skipped)} Schritt(e) nicht ausgeführt – "
+                          + "; ".join(f"Schritt {r.step_id}: {r.message}" for r in skipped))
         if not checkable or after is None:
             return finish("ausgeführt", "Die Anforderungen der Aufgabe wurden nicht einzeln geprüft.")
 

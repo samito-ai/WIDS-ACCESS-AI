@@ -157,6 +157,9 @@ Formulare und Berichte
 - answer_query: question(die Frage aus der Aufgabe), sql(GENAU EINE lesende SELECT-Anweisung in Access-SQL) – für
   Datenfragen („Wie viele …?“, „Welche ID/welchen Platz hat …?“, „In welchem Feld …?“ mit Datenbezug). Nie raten:
   das Ergebnis ermittelt WIDS aus der Datenbank; ändert nichts, keine Abfrage wird gespeichert. Eine Frage = ein Schritt.
+- calculate_value: question, given(WÖRTLICHER Ausschnitt der Aufgabe mit allen gegebenen Zahlen), expression(nur
+  Zahlen mit Dezimalpunkt, + - * / ** %, Klammern, round(x, n)), decimals? – für Rechenfragen OHNE Datenbankbezug
+  („Wie viel sind 15 % von 240 €?“). WIDS rechnet selbst; nie ein Ergebnis schätzen, keine Zahl erfinden.
 - modify_form: name(VORHANDENES Formular), changes{caption?, default_view?("single"|"continuous"|"datasheet"|"split"
   = geteiltes Formular), properties?{z. B. "PopUp": true, "SplitFormSplitterBar": false, "SplitFormDatasheet": 1,
   "SplitFormOrientation": 0, "SplitFormSize": 0, "Filter": "[Funktion]=\"Trainer\"", "FilterOn": true},

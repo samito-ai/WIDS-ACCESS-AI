@@ -83,6 +83,8 @@ class AutomationSettings(BaseModel):
     check_requirements: bool = True
     #: Diagnose im Abschlussbericht: Anforderung → Schritte → Schrittprüfung → Anforderungsprüfung, Korrekturzyklen
     diagnostic_report: bool = True
+    #: Vom Benutzer freigegebene Lern-/Projektordner – NUR LESEND, nur Dateien, die die Aufgabe namentlich nennt
+    source_folders: list[str] = Field(default_factory=list)
 
 
 class SecuritySettings(BaseModel):

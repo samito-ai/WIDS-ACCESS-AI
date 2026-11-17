@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from app.access import importer
 from app.access.service import AccessService, ConnectionStatus
 from app.agent.analyzer import TaskAnalyzer
 from app.agent.orchestrator import TaskPipeline
@@ -25,6 +26,7 @@ class AppContext:
     def __init__(self, storage: Storage | None = None, secrets: SecretStore | None = None) -> None:
         self.storage = storage or Storage()
         self.settings: AppSettings = self.storage.load_settings()
+        importer.set_user_folders(self.settings.automation.source_folders)
         self.log_file = logging_setup.configure_logging(self.settings.logging.level)
         self.secrets = secrets or SecretStore()
         self.access = AccessService(operation_timeout_s=self.settings.access.operation_timeout_s)
@@ -39,6 +41,7 @@ class AppContext:
 
     def save_settings(self) -> None:
         self.storage.save_settings(self.settings)
+        importer.set_user_folders(self.settings.automation.source_folders)
         self.access.operation_timeout_s = self.settings.access.operation_timeout_s
         logging_setup.set_level(self.settings.logging.level)
         self.ai.reset()

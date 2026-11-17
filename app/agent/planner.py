@@ -839,6 +839,20 @@ class PlanValidator:
         if kind not in READ_ONLY_KINDS:
             self._err(report, step, "Eine Datenfrage darf nur mit einer lesenden Abfrage (SELECT) beantwortet werden.")
 
+    def _check_calculate_value(self, step: m.PlanStep, state: _State, report: ValidationReport) -> None:
+        from app.agent import calc
+
+        action: m.CalculateValue = step.action  # type: ignore[assignment]
+        try:
+            calc.evaluate(action.expression)
+            unknown = calc.unknown_numbers(action.expression, action.given)
+        except calc.CalcError as exc:
+            self._err(report, step, f"Rechenausdruck nicht zulässig: {exc}")
+            return
+        if unknown:
+            self._err(report, step, "Rechenausdruck enthält Zahlen, die nicht in den Angaben stehen (nie erfinden): "
+                      + ", ".join(unknown))
+
     def _check_modify_form(self, step: m.PlanStep, state: _State, report: ValidationReport) -> None:
         action: m.ModifyForm = step.action  # type: ignore[assignment]
         if state.known and not self._form_known(state, action.name):

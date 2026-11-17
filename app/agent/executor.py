@@ -15,7 +15,7 @@ from app.access.engine import AccessEngine
 from app.access.models import DatabaseSchema
 from app.access.naming import quote_ident
 from app.access.sqlbuilder import build_sql, classify_sql, ensure_single_statement
-from app.core.errors import ObjectNotFoundError
+from app.core.errors import ObjectNotFoundError, WidsError
 from app.core.logging_setup import get_logger
 from app.tasks import models as m
 
@@ -303,6 +303,19 @@ class AccessExecutor:
         answer = m.answer_summary(columns, rows)
         return StepResult(step_id=0, message=f"{a.question} → {answer}",
                           details={"answer": answer, "columns": columns, "rows": rows[:20], "row_count": len(rows)})
+
+    def _do_calculate_value(self, e: AccessEngine, a: m.CalculateValue, o: ExecOptions) -> StepResult:
+        from app.agent import calc
+
+        try:
+            unknown = calc.unknown_numbers(a.expression, a.given)
+            if unknown:
+                raise calc.CalcError("Zahl(en) nicht in den Angaben der Aufgabe: " + ", ".join(unknown))
+            answer = calc.format_value(calc.evaluate(a.expression), a.decimals)
+        except calc.CalcError as exc:
+            raise WidsError(f"Rechnung nicht ausführbar: {exc}") from exc
+        return StepResult(step_id=0, message=f"{a.question} → {answer}",
+                          details={"answer": answer, "expression": a.expression})
 
     def _do_modify_form(self, e: AccessEngine, a: m.ModifyForm, o: ExecOptions) -> StepResult:
         e.objects.modify_form(a.name, a.changes)

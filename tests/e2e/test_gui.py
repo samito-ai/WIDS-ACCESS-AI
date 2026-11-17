@@ -277,3 +277,18 @@ def test_dashboard_system_test_costs_updates_and_diagnosis(app_window: Any, qtbo
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(target), ""))
     panel.export_diagnose()
     assert target.read_text("utf-8") == report.read_text("utf-8")
+
+
+def test_learning_folders_are_validated_and_saved(app_window: Any, tmp_path: Path) -> None:
+    """Beta 4: freigegebene Lernordner – System-/Anmeldeordner werden abgewiesen, gültige gespeichert und genutzt."""
+    from app.access import importer
+
+    window, _, messages = app_window
+    window.set_folders.setPlainText(r"C:\Windows\System32")
+    window.save_settings()
+    assert "ausgeschlossen" in messages[-1] and window.ctx.storage.load_settings().automation.source_folders == []
+    window.set_folders.setPlainText(str(tmp_path))
+    window.save_settings()
+    assert window.ctx.storage.load_settings().automation.source_folders == [str(tmp_path)]
+    assert [tmp_path] == importer._USER_FOLDERS
+    importer.set_user_folders([])
