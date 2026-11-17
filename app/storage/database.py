@@ -209,13 +209,15 @@ class Storage:
         with self._tx() as cur:
             cur.execute(f"UPDATE tasks SET {assignments} WHERE id = ?", (*fields.values(), task_id))
 
-    def step_done_before(self, db_path: str, fingerprint: str, exclude_task: int) -> int | None:
-        """Aufgabe, in der genau dieser Schritt an genau dieser Datenbank schon erfolgreich lief (oder ``None``)."""
+    def step_done_before(self, db_path: str, fingerprint: str, exclude_task: int, raw_text: str) -> int | None:
+        """Frühere Aufgabe mit DERSELBEN Aufgabenstellung an derselben Datenbank, in der genau dieser Schritt erfolgreich
+        lief (erneuter Start) – sonst ``None``. Andere Aufgaben mit zufällig gleichen Werten zählen nie."""
         with self._tx() as cur:
             row = cur.execute(
                 "SELECT e.task_id FROM task_events e JOIN tasks t ON t.id = e.task_id WHERE t.db_path = ? "
-                "COLLATE NOCASE AND e.level = 'step_done' AND e.data LIKE ? AND e.task_id <> ? ORDER BY e.id DESC LIMIT 1",
-                (db_path, f'%"{fingerprint}"%', exclude_task)).fetchone()
+                "COLLATE NOCASE AND t.raw_text = ? AND e.level = 'step_done' AND e.data LIKE ? AND e.task_id <> ? "
+                "ORDER BY e.id DESC LIMIT 1",
+                (db_path, raw_text, f'%"{fingerprint}"%', exclude_task)).fetchone()
         return int(row["task_id"]) if row else None
 
     def add_task_event(self, task_id: int, level: str, message: str, data: dict[str, Any] | None = None) -> None:

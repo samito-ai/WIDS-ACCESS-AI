@@ -309,6 +309,28 @@ def _check_page(e: AccessEngine, name: str, page: Any, labels: Any, record_sourc
         v.add(f"{across * down} Etiketten je Seite", pages == expected, f"{pages} Seite(n) für {count} Etiketten")
 
 
+def records_present(engine: AccessEngine, table: str, records: list[dict[str, Any]]) -> bool:
+    """Sind ALLE Datensätze (samt Mehrfachnennung) mit ihren vergleichbaren Werten in der Tabelle? Ohne vergleichbare
+    Werte lässt sich das nicht belegen → ``False``."""
+    from collections import Counter
+
+    info = engine.schema().table(table)
+    if info is None:
+        return False
+    for record, times in Counter(repr(sorted(r.items())) for r in records).items():
+        values = dict(next(r for r in records if repr(sorted(r.items())) == record))
+        conditions = []
+        for key, value in values.items():
+            field = info.field(key)
+            if field is None or value is None or field.type in (AccessType.LONG_TEXT, AccessType.OLE, AccessType.HYPERLINK,
+                                                                AccessType.SINGLE, AccessType.DOUBLE):
+                continue
+            conditions.append(f"{quote_ident(field.name)} = {sql_literal(to_dao(value, field.type, field.name))}")
+        if not conditions or engine.tables.count_records(table, " AND ".join(conditions)) < times:
+            return False
+    return True
+
+
 class ResultVerifier:
     _schema: Any = None
 
@@ -778,8 +800,10 @@ class ResultVerifier:
     def _verify_insert_records(self, e: AccessEngine, a: m.InsertRecords, r: StepResult, v: Verification) -> None:
         before = int(r.details.get("count_before", -1))
         after = e.tables.count_records(a.table)
-        if r.details.get("already_done"):  # erneuter Start: nichts eingefügt – die Daten müssen aber da sein
-            before = -1
+        if r.details.get("already_done"):  # erneuter Start: nichts eingefügt – JEDER verlangte Datensatz muss da sein
+            v.add("Alle verlangten Datensätze vorhanden", records_present(e, a.table, a.records),
+                  f"{len(a.records)} Datensatz/-sätze, bereits in Aufgabe {r.details['already_done']} eingefügt")
+            return
         if before >= 0:
             v.add("Datensatzanzahl gestiegen", after == before + len(a.records), f"{before} → {after}")
         # Stichprobe: der erste Datensatz ist mit seinen einfachen Werten auffindbar

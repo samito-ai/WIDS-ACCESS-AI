@@ -269,6 +269,15 @@ def open_access_database() -> str:
     return front[0] if front else ""
 
 
+def is_tecomp_exercise(db_path: str) -> bool:
+    """Echte te.comp-Übung: liegt im te.comp-Arbeitsordner UND trägt einen Übungs-/Bildschirminfo-Namen oder gehört zu
+    einem Workshop – eine beliebige eigene Datei in diesem Ordner zählt nicht."""
+    if not in_tecomp_workdir(db_path):
+        return False
+    name = Path(db_path).name
+    return bool(_EXERCISE_NAME.fullmatch(name) or SCREENINFO_FILE.fullmatch(name) or workshop_for(db_path))
+
+
 def in_tecomp_workdir(db_path: str) -> bool:
     """te.comp legt seine Übungsdateien direkt in %USERPROFILE%\\te.comp\\te.comp-training ab."""
     import os

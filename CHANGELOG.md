@@ -3,6 +3,22 @@
 Alle wichtigen Änderungen an WIDS ACCESS AI. Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/),
 Versionen nach [Semantic Versioning](https://semver.org/lang/de/).
 
+## [1.0.0b6] – 2026-11-17 (Patch)
+
+### Neu: autonom in autorisierten Übungen
+- **Eindeutige Löschungen/Änderungen ohne Rückfrage** – auch im Hintergrund –, wenn alles zutrifft: echte te.comp-Übung
+  (Übungs-/Bildschirminfo-Name oder Workshop im te.comp-Arbeitsordner) oder WIDS-Arbeitskopie; Sicherung erstellt
+  und als Datei geprüft; Bedingung vorhanden; höchstens so viele Treffer wie die Mengengrenze (Standard 25); lokale,
+  nicht verknüpfte Tabelle. Damit läuft z. B. „Golfclub Neckartal löschen“ ohne „Wartet auf Bestätigung“ durch.
+- Weiterhin mit Bestätigung: eigene bzw. unbekannte Dateien, „alle Datensätze“, Tabelle/Feld löschen,
+  verlustbehaftete Typänderungen, Aktionsabfragen, verknüpfte Tabellen. Prüfungsschutz unverändert.
+
+### Behoben
+- **Erneuter Start fügt nichts doppelt ein:** Lief dieselbe Aufgabenstellung an derselben Datei schon teilweise, wird
+  ein bereits ausgeführter Einfügeschritt übersprungen – aber nur, wenn ALLE verlangten Datensätze nachweislich
+  vorhanden sind (sonst, z. B. nach Wiederherstellung einer Sicherung, wird normal eingefügt). Die Prüfung verlangt
+  dann jeden Datensatz samt Mehrfachnennung.
+
 ## [1.0.0b5] – 2026-11-17 (Patch)
 
 ### Behoben (Live-Fund 17.11., Golfclubs-Übung)

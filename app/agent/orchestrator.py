@@ -24,7 +24,7 @@ from app.agent.executor import AccessExecutor, ExecOptions, StepResult
 from app.agent.explainer import build_report
 from app.agent.planner import PlanIssue, PlanValidator, ValidationReport
 from app.agent.recovery import RecoveryManager, RecoveryState
-from app.agent.verifier import ResultVerifier, Verification
+from app.agent.verifier import ResultVerifier, Verification, records_present
 from app.core.errors import (
     ApprovalRequiredError,
     PolicyViolationError,
@@ -577,9 +577,11 @@ class TaskPipeline:
                 elif check.errors:
                     result = StepResult(step_id=step.id, status="skipped",
                                         message="Übersprungen, passt nicht mehr zur Datenbank: " + check.errors[0].message)
-                elif isinstance(step.action, m.InsertRecords | m.ImportData) and (
-                        earlier := self._storage.step_done_before(db_path, _fingerprint(step), task_id)) is not None:
-                    # erneuter Start derselben Aufgabe: genau diese Daten wurden schon eingefügt – nicht doppelt
+                elif isinstance(step.action, m.InsertRecords) and (earlier := self._storage.step_done_before(
+                        db_path, _fingerprint(step), task_id, prepared.task.text)) is not None and self._access.run(
+                        partial(records_present, table=step.action.table, records=step.action.records)):
+                    # erneuter Start DERSELBEN Aufgabe an derselben Datei, und ALLE verlangten Datensätze sind schon da:
+                    # nicht doppelt einfügen (fehlt einer, z. B. nach Wiederherstellung, wird normal eingefügt)
                     result = StepResult(step_id=step.id, message=f"Bereits in Aufgabe {earlier} ausgeführt – nicht wiederholt",
                                         details={"already_done": earlier})
                 else:
@@ -1003,18 +1005,19 @@ class TaskPipeline:
 
         if not self.settings.security.always_backup:
             return False
-        if not (tecomp.in_tecomp_workdir(db_path) or self._backups.is_working_copy(db_path)):
+        if not (tecomp.is_tecomp_exercise(db_path) or self._backups.is_working_copy(db_path)):
             return False
         action = step.action
-        if isinstance(action, m.DeleteRecords | m.UpdateRecords):
-            if not action.where:
-                return False  # „alle Datensätze“ ist nie eindeutig genug
-            try:
-                count = self._access.run(lambda e: e.tables.count_records(action.table, action.where))
-            except WidsError:
-                return False
-            return count <= self._policy.mass_change_threshold
-        return True
+        if not isinstance(action, m.DeleteRecords | m.UpdateRecords) or not action.where:
+            # Tabelle/Feld löschen, verlustbehaftete Typänderung, Aktionsabfragen, „alle Datensätze“: immer Bestätigung
+            return False
+        try:
+            table = self._access.schema().table(action.table)
+            count = self._access.run(lambda e: e.tables.count_records(action.table, action.where))
+        except WidsError:
+            return False
+        # verknüpfte Tabellen liegen außerhalb der Übungsdatei – und außerhalb ihrer Sicherung
+        return table is not None and not table.linked and count <= self._policy.mass_change_threshold
 
     def _impact(self, step: m.PlanStep) -> tuple[str, bool]:
         """Beschreibt die Auswirkung eines destruktiven Schritts; ``True``, wenn die Anzahl exakt ist."""

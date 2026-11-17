@@ -1,6 +1,6 @@
 # WIDS ACCESS AI
 
-**Version 1.0.0 Beta 5** · Windows · Microsoft Access · Anthropic Claude · kostenlos, Open Source ([MIT](LICENSE))
+**Version 1.0.0 Beta 6** · Windows · Microsoft Access · Anthropic Claude · kostenlos, Open Source ([MIT](LICENSE))
 
 > KI-Assistent für Microsoft-Access-**Übungen**: Aufgabe erkennen → Lösung planen → Sicherung → in Access ausführen →
 > jede Anforderung unabhängig prüfen → Diagnosebericht. Funktioniert mit jeder Access-Datei, egal wie sie heißt.
@@ -34,6 +34,9 @@
   erneut nachgeprüft; Rechenfragen rechnet WIDS selbst exakt (kaufmännisch gerundet, zweiter Rechenweg zur Kontrolle),
   jede Zahl muss in der Aufgabe stehen. Multiple Choice: jede Option einzeln begründet – eine unsichere oder nicht
   begründete Antwort gilt als „nicht gesichert“ (roter Punkt), nie als beantwortet
+- **Autonom in Übungen:** In echten te.comp-Übungen (und WIDS-Arbeitskopien) laufen eindeutige Lösch- und
+  Änderungsschritte mit Bedingung (höchstens 25 Datensätze) nach geprüfter Sicherung ohne Rückfrage – Alt+W →
+  bearbeiten → prüfen → fertig. Eigene Dateien, „alle Datensätze“ und Strukturlöschungen brauchen weiter eine Bestätigung
 - **Mehrteilige Aufgaben ohne Blockade:** Ein bestätigungspflichtiger Löschschritt hält nur sich selbst (und spätere
   Schritte am selben Objekt) an; unabhängige Schritte laufen und werden geprüft, das Ergebnis heißt „teilweise“
 - **Berichtslayout nachgemessen:** Beschriftung links neben dem richtigen Feld, Reihenfolge, keine Überlappung;

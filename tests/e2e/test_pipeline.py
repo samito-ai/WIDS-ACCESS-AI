@@ -1364,7 +1364,7 @@ GOLF_AUTO = [
 def _practice(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.vision import tecomp
 
-    monkeypatch.setattr(tecomp, "in_tecomp_workdir", lambda path: True)  # wie eine te.comp-Übung im Arbeitsordner
+    monkeypatch.setattr(tecomp, "is_tecomp_exercise", lambda path: True)  # wie eine te.comp-Übung im Arbeitsordner
 
 
 def test_practice_database_runs_clear_deletion_autonomously_and_reruns_without_duplicates(
@@ -1398,3 +1398,46 @@ def test_practice_database_still_holds_unbounded_deletion(make: Any, monkeypatch
     before = h.access.run(lambda e: e.tables.count_records("Bestellungen"))
     _, outcome, _ = run(h, "Löschen Sie alle Bestellungen und erstellen Sie qryOrte.", AutoInteraction(interactive=False))
     assert outcome.status == "teilweise" and h.access.run(lambda e: e.tables.count_records("Bestellungen")) == before
+
+
+def test_practice_database_reinserts_when_rows_are_gone_and_keeps_confirmation_for_schema_and_linked(
+        make: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Codex: nach Wiederherstellung einer Sicherung fehlt der Datensatz → normal einfügen (nicht „bereits erledigt“);
+    Tabelle löschen, Aktionsabfragen und verknüpfte Tabellen laufen nie ohne Bestätigung."""
+    _practice(monkeypatch)
+    insert = [GOLF_AUTO[0]]
+    h = make([solution(insert, task_type="data_editing"), solution(insert, task_type="data_editing")])
+    text = "Ergänzen Sie den Kunden Neuzugang."
+    run(h, text, AutoInteraction(interactive=False))
+    h.access.run(lambda e: e.tables.delete_records("Kunden", "Nachname='Neuzugang'", max_affected=5))  # wie zurückgesetzt
+    _, again, _ = run(h, text, AutoInteraction(interactive=False))
+    assert "Bereits" not in again.results[0].message and again.status == "erfolgreich", again.error
+    assert h.access.run(lambda e: e.tables.count_records("Kunden", "Nachname='Neuzugang'")) == 1
+
+    from app.agent.orchestrator import TaskPipeline
+    from app.tasks import models as m
+
+    def step(spec: dict[str, Any]) -> Any:
+        return m.PlanStep.model_validate({"id": 1, "title": "t", "action": spec})
+
+    db = h.access.path
+    assert not h.pipeline._auto_allowed(step({"action": "delete_table", "name": "Bestellungen"}), db)
+    assert not h.pipeline._auto_allowed(step({"action": "run_action_query", "sql": "DELETE FROM Bestellungen"}), db)
+    assert h.pipeline._auto_allowed(step({"action": "delete_records", "table": "Bestellungen", "where": "Menge = 99"}), db)
+    real = h.access.schema
+    schema = real(refresh=True).model_copy(deep=True)
+    schema.table("Bestellungen").linked = True
+    monkeypatch.setattr(h.access, "schema", lambda *a, **k: schema)
+    assert not h.pipeline._auto_allowed(step({"action": "delete_records", "table": "Bestellungen", "where": "Menge = 99"}),
+                                        db), "verknüpfte Tabelle: außerhalb der Übungsdatei und ihrer Sicherung"
+    assert TaskPipeline is not None
+
+
+def test_only_real_tecomp_exercises_count_as_practice(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.vision import tecomp
+
+    monkeypatch.setattr(tecomp, "in_tecomp_workdir", lambda path: True)
+    monkeypatch.setattr(tecomp, "workshop_for", lambda path, base=None: None)
+    assert tecomp.is_tecomp_exercise(str(tmp_path / "03021_66734509.accdb"))
+    assert tecomp.is_tecomp_exercise(str(tmp_path / "0501S2_66732936.accdb"))
+    assert not tecomp.is_tecomp_exercise(str(tmp_path / "Personal.accdb")), "eigene Datei im te.comp-Ordner"
