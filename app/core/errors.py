@@ -188,7 +188,7 @@ class PolicyViolationError(WidsError):
 
 
 class ApprovalRequiredError(WidsError):
-    default_message = "Für diese Aktion ist eine ausdrückliche Freigabe erforderlich."
+    default_message = "Diese Aktion ist nicht eindeutig genug für die automatische Ausführung."
 
 
 class TaskCancelledError(WidsError):

@@ -671,7 +671,7 @@ class MainWindow(QMainWindow):
             return
         if fresh:
             self._cancel = threading.Event()
-        self.set_busy(True, "Warte auf Freigabe …")
+        self.set_busy(True, "Wird ausgeführt …")
         if not self.live.tracker.running:  # Klick auf „Plan ausführen“ nach einer reinen Analyse
             self.live.tracker.resume()
             self.live.tracker.plan(len(prepared.solution.plan.steps))
@@ -1058,9 +1058,10 @@ class MainWindow(QMainWindow):
             self.set_hotkey[name] = edit
             form.addRow(label, edit)
         self.set_conflict = QComboBox()
-        for key, label in (("ask", "Nachfragen"), ("skip", "Überspringen"), ("rename", "Unter neuem Namen anlegen"), ("overwrite", "Ersetzen")):
+        # ohne Rückfragen: „Nachfragen“ und „Ersetzen“ wirkten wie „Überspringen“ – nur echte Möglichkeiten anbieten
+        for key, label in (("skip", "Überspringen"), ("rename", "Unter neuem Namen anlegen")):
             self.set_conflict.addItem(label, key)
-        self.set_conflict.setCurrentIndex(self.set_conflict.findData(s.automation.conflict_policy))
+        self.set_conflict.setCurrentIndex(max(self.set_conflict.findData(s.automation.conflict_policy), 0))
         self.set_copy = QCheckBox("Dateien standardmäßig als Übungskopie öffnen")
         self.set_copy.setChecked(s.access.work_on_copy_default)
         self.set_backup = QCheckBox("Vor jeder Ausführung automatisch sichern")
@@ -1081,7 +1082,7 @@ class MainWindow(QMainWindow):
         form.addRow("", self.set_copy)
         form.addRow("", self.set_backup)
         form.addRow("", self.set_exam)
-        form.addRow("Extra-Bestätigung ab … Datensätzen", self.set_mass)
+        form.addRow("Automatisch höchstens … Datensätze je Schritt", self.set_mass)
         form.addRow("", self.set_vision)
         self.set_check_req = QCheckBox("Nach der Ausführung jede Anforderung gegen die Datenbank prüfen (KI)")
         self.set_check_req.setChecked(s.automation.check_requirements)

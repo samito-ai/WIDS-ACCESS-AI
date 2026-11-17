@@ -166,6 +166,12 @@ def test_version_comparison_and_release_choice() -> None:
     assert updater.pick_latest(releases, current="1.0.0b3") is None, "nichts Neueres"
     body = f"| `WIDS-Access-AI.exe` | 1 Byte | `{good.upper()}` |"
     assert updater.pick_latest([_release("v1.0.0-beta.4", body=body)], current="1.0.0b3").sha256 == good
+    # Stable-Kanal: Beta → 1.0.0 wird angeboten; 1.0.0 bekommt nur 1.0.1 (Stable), nie die Vorabversion 1.1.0-beta.1
+    channel = [_release("v1.0.0", digest="sha256:" + good), _release("v1.0.1", digest="sha256:" + good),
+               {**_release("v1.1.0-beta.1", digest="sha256:" + good), "prerelease": True}]
+    assert updater.pick_latest(channel[:1], current="1.0.0b7").version == "1.0.0"
+    assert updater.pick_latest(channel, current="1.0.0").version == "1.0.1", "Stable bekommt keine Beta"
+    assert updater.pick_latest(channel, current="1.0.0b7").version == "1.1.0-beta.1", "Beta-Nutzer bleiben im Beta-Kanal"
 
 
 def test_check_without_internet_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:

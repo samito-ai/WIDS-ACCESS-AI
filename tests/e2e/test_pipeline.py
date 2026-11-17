@@ -1102,7 +1102,7 @@ def test_background_never_asks_and_never_bypasses_a_destructive_step(make: Any) 
     background = AutoInteraction(interactive=False, confirm_destructive=True)
     before = h.access.run(lambda e: e.tables.count_records("Bestellungen"))
     _, outcome, _ = run(h, "Löschen Sie alle Bestellungen mit einer Menge.", background)
-    assert outcome.status == "blockiert" and "löschende Schritte" in outcome.error, outcome.error
+    assert outcome.status == "blockiert" and "nicht eindeutige Löschungen" in outcome.error, outcome.error
     assert background.requests == [] and background.confirmations == []
     assert h.access.run(lambda e: e.tables.count_records("Bestellungen")) == before
 
@@ -1247,7 +1247,7 @@ def test_background_runs_independent_steps_when_a_deletion_awaits_approval(make:
     before = h.access.run(lambda e: e.tables.count_records("Bestellungen"))
     _, outcome, _ = run(h, "Ergänzen Sie den Kunden, löschen Sie die Bestellungen, erstellen Sie die Abfrage.", background)
     assert outcome.status == "teilweise", outcome.error
-    assert "Schritt 2" in outcome.error and "Bestätigung" in outcome.error, outcome.error
+    assert "Schritt 2" in outcome.error and "Blockiert" in outcome.error, outcome.error
     assert h.access.run(lambda e: e.tables.count_records("Bestellungen")) == before, "nichts gelöscht"
     assert h.access.run(lambda e: e.queries.run_select("qryBruchsal"))[1] == [["Ergänzt"]], "unabhängige Schritte liefen"
     assert background.requests == [] and background.confirmations == []
@@ -1467,3 +1467,118 @@ def test_auto_rule_excludes_cascade_deletes_and_linked_action_queries(make: Any,
     schema.relations = []
     schema.table("Bestellungen").linked = True
     assert not h.pipeline._auto_allowed(query, db), "verknüpfte Tabelle"
+
+
+# --------------------------------------------------------------------------- Stable 1.0.0 (Codex-Review 17.11.)
+def test_auto_permission_is_rechecked_right_before_the_destructive_step(make: Any) -> None:
+    """Schritt 1 legt eine Löschweitergabe an, Schritt 2 löscht einen Kunden: bei der Planung war Schritt 2 eindeutig,
+    zur Ausführung würde er alle Bestellungen des Kunden mitlöschen (von der Mengengrenze nicht gezählt) → blockiert."""
+    steps = [
+        {"title": "Beziehung", "action": {"action": "create_relationship", "table": "Kunden", "foreign_table": "Bestellungen",
+                                          "fields": [{"primary": "KundenNr", "foreign": "KundenNr"}],
+                                          "enforce_integrity": True, "cascade_delete": True}},
+        {"title": "Kunde löschen", "action": {"action": "delete_records", "table": "Kunden", "where": "KundenNr = 1"}},
+    ]
+    h = make([solution(steps, task_type="data_editing")])
+    orders = h.access.run(lambda e: e.tables.count_records("Bestellungen", "KundenNr = 1"))
+    assert orders > 0
+    _, outcome, _ = run(h, "Löschweitergabe einrichten und Kunde 1 löschen.", AutoInteraction(interactive=False))
+    assert outcome.results[1].status == "skipped" and "Blockiert" in outcome.results[1].message
+    assert outcome.status != "erfolgreich"
+    assert h.access.run(lambda e: e.tables.count_records("Kunden", "KundenNr = 1")) == 1
+    assert h.access.run(lambda e: e.tables.count_records("Bestellungen", "KundenNr = 1")) == orders, "nichts mitgelöscht"
+
+
+def test_rerun_inserts_only_missing_records_and_compares_empty_values(make: Any) -> None:
+    """Erneuter Start derselben Aufgabe: vorhandene Datensätze nicht doppelt, fehlende (gelöscht oder mit inzwischen
+    anderem Wert statt leer) werden eingefügt."""
+    insert = [{"title": "Kunden ergänzen", "action": {"action": "insert_records", "table": "Kunden", "records": [
+        {"KundenNr": None, "Nachname": "Alpha", "Vorname": None, "Ort": "Imst"},  # leerer AutoWert zählt nicht als Wert
+        {"Nachname": "Beta", "Vorname": "B", "Ort": "Imst"}]}}]
+    h = make([solution(insert, task_type="data_editing"), solution(insert, task_type="data_editing")])
+    text = "Ergänzen Sie die Kunden Alpha und Beta."
+    _, first, _ = run(h, text, AutoInteraction(interactive=False))
+    assert first.status == "erfolgreich", first.error
+    h.access.run(lambda e: e.tables.delete_records("Kunden", "Nachname='Beta'", max_affected=5))
+    h.access.run(lambda e: e.tables.update_records("Kunden", {"Vorname": "X"}, "Nachname='Alpha'", max_affected=5))
+    _, again, _ = run(h, text, AutoInteraction(interactive=False))
+    assert again.status == "erfolgreich", again.error
+    count = h.access.run(lambda e: e.tables.count_records("Kunden", "Nachname='Alpha' AND Vorname Is Null"))
+    assert count == 1, "Alpha mit leerem Vornamen fehlte → neu eingefügt"
+    assert h.access.run(lambda e: e.tables.count_records("Kunden", "Nachname='Alpha'")) == 2
+    assert h.access.run(lambda e: e.tables.count_records("Kunden", "Nachname='Beta'")) == 1, "nur der fehlende"
+
+
+def test_saved_queries_are_resolved_for_dependencies_and_linked_tables(make: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Benannte Aktionsabfragen verraten ihre Tabellen erst über ihr (auch verschachteltes) SQL; mehrdeutige
+    Beziehungen ohne Namen werden nicht automatisch gelöscht."""
+    from app.access.models import QueryInfo, RelationInfo
+    from app.agent.orchestrator import _held_by, _tables_in
+    from app.tasks import models as m
+
+    queries = {"qryanfuegen": "insert into kunden select * from qryquelle", "qryquelle": "select * from neukunden"}
+    append = m.RunActionQuery(name="qryAnfuegen")
+    assert _tables_in(append, ["kunden", "neukunden", "artikel"], queries) == {"kunden", "neukunden"}
+    assert _held_by(append, {"kunden": 1}, ["kunden"], queries) == 1, "Anfügen wartet auf die blockierte Leerung"
+    assert _held_by(append, {"kunden": 1}, ["kunden"]) is None, "ohne Auflösung wäre die Abhängigkeit unsichtbar"
+
+    h = make([])
+    db = h.access.path
+
+    def step(spec: dict[str, Any]) -> Any:
+        return m.PlanStep.model_validate({"id": 1, "title": "t", "action": spec})
+
+    schema = h.access.schema(refresh=True).model_copy(deep=True)
+    schema.queries = [QueryInfo(name="qryLeeren", sql="DELETE FROM qryInnen"),
+                      QueryInfo(name="qryInnen", sql="SELECT * FROM Bestellungen")]
+    monkeypatch.setattr(h.access, "schema", lambda *a, **k: schema)
+    leeren = step({"action": "run_action_query", "name": "qryLeeren"})
+    assert h.pipeline._auto_allowed(leeren, db)
+    schema.table("Bestellungen").linked = True
+    assert not h.pipeline._auto_allowed(leeren, db), "verknüpfte Tabelle hinter einer gespeicherten Abfrage"
+    schema.table("Bestellungen").linked = False
+    unnamed = step({"action": "delete_relationship", "table": "Kunden", "foreign_table": "Bestellungen"})
+    schema.relations = [RelationInfo(name="r1", table="Kunden", foreign_table="Bestellungen")]
+    assert h.pipeline._auto_allowed(unnamed, db)
+    schema.relations.append(RelationInfo(name="r2", table="Kunden", foreign_table="Bestellungen"))
+    assert not h.pipeline._auto_allowed(unnamed, db), "zwei Beziehungen: Ziel nicht eindeutig"
+
+
+def test_updates_on_linked_tables_count_as_destructive(make: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.tasks import models as m
+
+    h = make([])
+    update = m.PlanStep.model_validate({"id": 1, "title": "t", "action": {
+        "action": "update_records", "table": "Kunden", "values": {"Ort": "X"}, "where": "KundenNr = 1"}})
+    assert h.pipeline._risk(update) == "modify"
+    schema = h.access.schema(refresh=True).model_copy(deep=True)
+    schema.table("Kunden").linked = True
+    monkeypatch.setattr(h.access, "schema", lambda *a, **k: schema)
+    assert h.pipeline._risk(update) == "destructive", "Daten einer anderen Datei – nicht in der Sicherung"
+    assert not h.pipeline._auto_allowed(update, h.access.path)
+
+
+def test_sql_repair_that_drops_the_condition_fails_verification(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.agent import executor as executor_module
+    from app.agent.verifier import ResultVerifier, Verification
+    from app.core.errors import WidsError
+    from app.tasks import models as m
+
+    class Queries:
+        def run_select_readonly(self, sql: str, limit: int) -> Any:
+            raise WidsError("Syntaxfehler")
+
+    class Engine:
+        queries = Queries()
+
+    query = m.CreateQuery(name="qryTirol", sql="SELECT * FROM Kunden WHERE Bundesland = 'Tirol'")
+    verifier = ResultVerifier()
+    monkeypatch.setattr(verifier, "_schema_of", lambda e: None)
+    cases = (("SELECT * FROM Kunden WHERE Ort =", "SELECT * FROM Kunden;", False),
+             ("SELECT [Nachnme] FROM Kunden WHERE Ort='Imst'", "SELECT Nachname FROM Kunden WHERE Ort='Imst';", True),
+             ("SELECT [Where] FROM T ORDER BY", "SELECT Wert FROM T ORDER BY Wert;", True))
+    for requested, stored, passed in cases:
+        monkeypatch.setattr(executor_module.AccessExecutor, "resolve_sql", lambda self, a, s, r=requested: r)
+        v = Verification(step_id=1)
+        verifier._check_same_result(Engine(), query, stored, [[1]], v)  # type: ignore[arg-type]
+        assert v.passed is passed, (requested, v.checks)

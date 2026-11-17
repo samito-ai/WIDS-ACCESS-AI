@@ -3,6 +3,40 @@
 Alle wichtigen Änderungen an WIDS ACCESS AI. Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/),
 Versionen nach [Semantic Versioning](https://semver.org/lang/de/).
 
+## [1.0.0] – 2026-11-17 (Stable)
+
+Erste Stable-Version. Funktionsumfang wie Beta 7; diese Version stabilisiert, sie bringt keine neuen Funktionen.
+
+### Behoben (Datensicherheit, unabhängiges Codex-Review)
+- **Automatik-Freigabe direkt vor dem Schritt erneut geprüft:** Legt ein früherer Schritt derselben Aufgabe z. B. eine
+  Löschweitergabe an, wird ein späterer Löschschritt jetzt blockiert, statt Detaildatensätze ungezählt mitzulöschen.
+- **Gespeicherte Abfragen werden aufgelöst** (auch verschachtelt): Eine benannte Aktionsabfrage auf einer verknüpften
+  Tabelle läuft nicht mehr automatisch, und eine benannte Anfügeabfrage wartet auf eine blockierte Löschung derselben
+  Tabelle.
+- **Änderungen an verknüpften Tabellen** gelten als löschend (die Daten liegen außerhalb der Sicherung) und werden
+  blockiert.
+- **Erneuter Start:** Es werden nur die tatsächlich fehlenden Datensätze eingefügt; leere Werte werden verglichen
+  (leere AutoWerte ausgenommen). Vorher konnte ein teilweise vorhandener Block doppelt eingefügt werden.
+- **Beziehung ohne Namen löschen** läuft nur automatisch, wenn genau eine Beziehung zwischen den Tabellen besteht.
+- **SQL-Reparatur:** Hat eine Reparatur die WHERE- oder HAVING-Bedingung entfernt, gilt die Prüfung als nicht
+  bestanden (vorher nur ein Hinweis).
+- **Verbindungstest** beachtet ein bereits erreichtes Kostenlimit.
+
+### Behoben
+- **Keine falschen Versprechen mehr in Meldungen:** Blockierte Schritte meldeten „Wartet auf Bestätigung … im
+  Dashboard erneut starten“, obwohl es seit Beta 7 keine Rückfragen mehr gibt. Jetzt: „Blockiert – nicht eindeutig
+  genug … in Access von Hand erledigen oder die Aufgabe genauer fassen“. Ebenso bei der Mengengrenze, im Plan
+  („löscht – nur mit Sicherung und eindeutigem Ziel“) und beim Ausführen („Wird ausgeführt …“ statt „Warte auf
+  Freigabe“).
+- **Einstellungen ohne wirkungslose Optionen:** „Bei Namenskonflikten“ bot „Nachfragen“ und „Ersetzen“ an, die ohne
+  Rückfragen wie „Überspringen“ wirkten; angeboten werden nur noch „Überspringen“ und „Unter neuem Namen anlegen“. Die
+  Mengengrenze heißt „Automatisch höchstens … Datensätze je Schritt“.
+- **Update-Kanal:** Eine Stable-Version bekommt nur Stable-Updates angeboten (z. B. 1.0.1), nie Vorabversionen,
+  auch wenn ein Beta-Release auf GitHub nicht als Vorabversion markiert wäre. Beta-Nutzer bekommen 1.0.0 angeboten.
+
+### Geprüft
+- README, Installation und Schnellstart beschreiben unterstützte Aufgaben und bekannte Grenzen ohne Beta-Hinweise.
+
 ## [1.0.0b7] – 2026-11-17
 
 ### Geändert: keine Rückfragen mehr

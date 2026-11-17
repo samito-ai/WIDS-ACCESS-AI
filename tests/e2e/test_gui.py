@@ -173,7 +173,7 @@ def test_background_mode_opens_no_dialog_no_toast_and_keeps_red_dot(app_window: 
     assert not window.isVisible() and not window.compact.isVisible(), "kein Fenster öffnet sich von selbst"
     assert window.ctx.access.run(lambda e: e.tables.count_records("Bestellungen")) == before, "nichts gelöscht"
     record = window.ctx.storage.list_tasks(limit=1)[0]
-    assert record.status == "blockiert" and "löschende" in (record.error or "")
+    assert record.status == "blockiert" and "nicht eindeutige Löschungen" in (record.error or "")
     assert window.overlay.state == "error" and window.tray_state == "error"
     qtbot.wait(3500)
     assert window.overlay.state == "error", "Rot bleibt stehen, bis die nächste Aufgabe startet"

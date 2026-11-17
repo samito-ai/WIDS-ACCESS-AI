@@ -26,13 +26,14 @@ Ordner übertragen; an die KI gehen nur die ersten Zeilen bzw. ein gekürzter Te
 Windows-, Programm- und Anmeldedaten-Ordner werden abgewiesen.
 
 ### Updates
-Ab Beta 3 prüft WIDS beim Start (still, ohne Internet einfach nicht) die Releases dieses Repositorys. Eine neue Version
+WIDS prüft beim Start (still, ohne Internet einfach nicht) die Releases dieses Repositorys. Die Stable-Version bekommt
+nur Stable-Updates angeboten (z. B. 1.0.1), keine Vorabversionen. Eine neue Version
 erscheint im Dashboard unter „System, Updates & Diagnose“; **„Update installieren“** lädt die EXE erst nach Zustimmung,
 prüft sie gegen die veröffentlichte SHA-256-Prüfsumme, startet sie testweise und ersetzt dann die laufende EXE. Die
 bisherige Version bleibt als `WIDS-Access-AI.vorher.exe` liegen, bis die neue eine Minute stabil läuft; startet die
 neue nicht, wird die bisherige automatisch zurückgelegt. Einstellungen, Schlüssel und Verlauf bleiben unverändert.
-Von **Beta 1/Beta 2** auf Beta 3 einmal von Hand aktualisieren: alte Instanz über das Infobereich-Symbol → „Beenden“,
-EXE durch die neue ersetzen, starten.
+Ab Beta 3 kommt 1.0.0 direkt über „Update installieren“. Von **Beta 1/Beta 2** einmal von Hand aktualisieren: alte
+Instanz über das Infobereich-Symbol → „Beenden“, EXE durch die neue ersetzen, starten.
 
 ## Variante B: aus dem Quellcode
 ```powershell
@@ -62,9 +63,9 @@ Eigene EXE bauen: `python build.py` (PyInstaller, inklusive Selbsttest).
 
 ## Erste Schritte
 1. Übung in Access öffnen (te.comp-Übung, Workshop oder eigene Datenbank – der Name ist egal) und **Alt+W** drücken.
-   Es gibt keine Freigaben mehr: Alt+W ist die bewusste Aktion. Löschende Schritte werden nur bei geöffnetem
-   Dashboard einzeln bestätigt, im Hintergrund hält WIDS dann an. Statuspunkt oben links: gelb = arbeitet, grün = vollständig geprüft,
-   rot = nicht abgeschlossen (Grund im Verlauf).
+   Alt+W ist die Zustimmung, es gibt keine Rückfragen: eindeutige Schritte laufen nach der Sicherung automatisch,
+   nicht eindeutige (z. B. „alle Datensätze löschen“) werden nur als Schritt blockiert. Statuspunkt oben links:
+   gelb = arbeitet, grün = vollständig geprüft, rot = nicht abgeschlossen (Grund im Verlauf).
 2. Vor jeder Änderung wird automatisch eine Sicherung erstellt (Verlauf → „Sicherung dieser Aufgabe wiederherstellen“).
 
 ## Nur für Übungen

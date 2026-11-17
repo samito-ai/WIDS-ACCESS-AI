@@ -353,7 +353,7 @@ class QueryOps:
                     ws.Rollback()
                     error = ApprovalRequiredError(
                         f"{context}: {affected} Datensätze wären betroffen (Grenze {max_affected}). "
-                        "Dafür ist eine zusätzliche Bestätigung nötig."
+                        "Das ist mehr als die Grenze für automatische Änderungen (Einstellungen) – nichts geändert."
                     )
                     error.affected = affected  # type: ignore[attr-defined]
                     raise error

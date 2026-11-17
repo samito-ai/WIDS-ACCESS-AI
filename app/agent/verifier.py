@@ -6,6 +6,7 @@ die Aktion laut Aufgabenmodell bewirken sollte.
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -309,26 +310,35 @@ def _check_page(e: AccessEngine, name: str, page: Any, labels: Any, record_sourc
         v.add(f"{across * down} Etiketten je Seite", pages == expected, f"{pages} Seite(n) für {count} Etiketten")
 
 
-def records_present(engine: AccessEngine, table: str, records: list[dict[str, Any]]) -> bool:
-    """Sind ALLE Datensätze (samt Mehrfachnennung) mit ihren vergleichbaren Werten in der Tabelle? Ohne vergleichbare
-    Werte lässt sich das nicht belegen → ``False``."""
+def missing_records(engine: AccessEngine, table: str, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Welche der verlangten Datensätze (samt Mehrfachnennung) fehlen in der Tabelle? Verglichen werden alle
+    vergleichbaren Werte, leere als ``Is Null``. Ohne vergleichbaren Wert lässt sich nichts belegen → gilt als fehlend."""
     from collections import Counter
 
     info = engine.schema().table(table)
     if info is None:
-        return False
+        return list(records)
+    missing: list[dict[str, Any]] = []
     for record, times in Counter(repr(sorted(r.items())) for r in records).items():
         values = dict(next(r for r in records if repr(sorted(r.items())) == record))
         conditions = []
         for key, value in values.items():
             field = info.field(key)
-            if field is None or value is None or field.type in (AccessType.LONG_TEXT, AccessType.OLE, AccessType.HYPERLINK,
-                                                                AccessType.SINGLE, AccessType.DOUBLE):
+            if field is None or field.type in (AccessType.LONG_TEXT, AccessType.OLE, AccessType.HYPERLINK,
+                                               AccessType.SINGLE, AccessType.DOUBLE):
                 continue
-            conditions.append(f"{quote_ident(field.name)} = {sql_literal(to_dao(value, field.type, field.name))}")
-        if not conditions or engine.tables.count_records(table, " AND ".join(conditions)) < times:
-            return False
-    return True
+            if value is None and field.type == AccessType.AUTONUMBER:
+                continue  # leerer AutoWert: Access vergibt die Nummer beim Einfügen selbst
+            conditions.append(f"{quote_ident(field.name)} Is Null" if value is None else
+                              f"{quote_ident(field.name)} = {sql_literal(to_dao(value, field.type, field.name))}")
+        found = engine.tables.count_records(table, " AND ".join(conditions)) if conditions else 0
+        missing += [values] * max(times - found, 0)
+    return missing
+
+
+def records_present(engine: AccessEngine, table: str, records: list[dict[str, Any]]) -> bool:
+    """Sind ALLE Datensätze (samt Mehrfachnennung) mit ihren vergleichbaren Werten in der Tabelle?"""
+    return not missing_records(engine, table, records)
 
 
 class ResultVerifier:
@@ -1017,8 +1027,15 @@ class ResultVerifier:
         try:
             _, wanted, _ = e.queries.run_select_readonly(requested, limit=_COMPARE_LIMIT + 1)
         except WidsError as exc:
-            v.add("Verlangtes Ergebnis vergleichbar", False, f"verlangtes SQL nicht ausführbar: {exc.user_message}",
-                  critical=False)
+            # nur Hinweis (sonst schlüge jede legitime Reparatur fehl) – außer die Reparatur hat Bedingungen entfernt
+            def clauses(sql: str) -> set[str]:  # ohne [Bezeichner] und 'Literale' – „[Where]“ ist keine Bedingung
+                plain = re.sub(r"\[[^\]]*\]|'[^']*'|\"[^\"]*\"", " ", sql)
+                return {k for k in ("where", "having") if re.search(rf"\b{k}\b", plain, re.I)}
+
+            dropped = sorted(k.upper() for k in clauses(requested) - clauses(stored_sql))
+            v.add("Verlangtes Ergebnis vergleichbar", False, f"verlangtes SQL nicht ausführbar: {exc.user_message}"
+                  + (f"; die gespeicherte Abfrage hat keine {'/'.join(dropped)}-Bedingung mehr" if dropped else ""),
+                  critical=bool(dropped))
             return
 
         def key(row: list[Any]) -> str:

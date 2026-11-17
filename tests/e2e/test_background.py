@@ -142,7 +142,7 @@ def test_review_when_requirements_not_confirmed_and_destructive_stops(background
     window._on_hotkey("solve")
     qtbot.waitUntil(lambda: not window._busy and window._prepared is None and window.tray_state != "running", timeout=60000)
     record = window.ctx.storage.list_tasks(limit=1)[0]
-    assert record.status == "blockiert" and "löschende Schritte" in (record.error or "")
+    assert record.status == "blockiert" and "nicht eindeutige Löschungen" in (record.error or "")
     assert window.overlay.state == "error" and window.ctx.access.run(lambda e: e.queries.exists("qryZwei")), \
         "löschender Schritt im Hintergrund nie automatisch → nichts gelöscht"
     assert approvals == [] and asked == [] and seen["boxes"] == [] and visible_windows() == [], "kein einziger Dialog"

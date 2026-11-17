@@ -24,7 +24,7 @@ from app.agent.executor import AccessExecutor, ExecOptions, StepResult
 from app.agent.explainer import build_report
 from app.agent.planner import PlanIssue, PlanValidator, ValidationReport
 from app.agent.recovery import RecoveryManager, RecoveryState
-from app.agent.verifier import ResultVerifier, Verification, records_present
+from app.agent.verifier import ResultVerifier, Verification, missing_records
 from app.core.errors import (
     ApprovalRequiredError,
     PolicyViolationError,
@@ -126,19 +126,35 @@ def _data_target(step: m.PlanStep) -> str:
 #: Fehler des Zugriffs (nicht des Plans) – keine KI-Ersatzschritte
 _ACCESS_PROBLEMS = {"DatabaseLockedError", "AccessBusyError", "AccessTimeoutError", "AccessNotRunningError",
                     "DatabaseReadOnlyError", "DatabaseNotFoundError"}
-_NO_DIALOG = "Wartet auf Bestätigung (Hintergrundbetrieb, keine Rückfrage möglich – im Dashboard erneut starten): "
+#: Seit Beta 7 gibt es keine Rückfragen mehr: was nicht eindeutig ist, wird nur als Schritt blockiert
+_BLOCKED = ("Blockiert – nicht eindeutig genug für die automatische Ausführung (in Access von Hand erledigen oder die "
+            "Aufgabe genauer fassen): ")
 
 
 _DATA_WRITES = (m.InsertRecords, m.UpdateRecords, m.DeleteRecords, m.ImportData, m.RunActionQuery, m.CopyTable)
 
 
-def _tables_in(action: Any, tables: list[str]) -> set[str]:
-    """Tabellen, die ein Schritt nennt – Ziel, Quelle oder in seinem SQL (als ganzes Wort)."""
+def _mentions(text: str, name: str) -> bool:
+    return re.search(rf"(?<![\w]){re.escape(name)}(?![\w])", text) is not None
+
+
+def _tables_in(action: Any, tables: list[str], queries: dict[str, str] | None = None) -> set[str]:
+    """Tabellen, die ein Schritt nennt – Ziel, Quelle oder in seinem SQL (als ganzes Wort). Genannte gespeicherte
+    Abfragen (``queries``: Name → SQL, klein geschrieben) werden aufgelöst, auch verschachtelt: eine benannte
+    Aktionsabfrage verrät ihre Tabellen erst über ihr SQL."""
     text = action.model_dump_json().lower()
-    return {t for t in tables if re.search(rf"(?<![\w]){re.escape(t)}(?![\w])", text)}
+    pending, seen = [text], set()
+    while pending and queries:
+        current = pending.pop()
+        for name, sql in queries.items():
+            if name not in seen and _mentions(current, name):
+                seen.add(name)
+                pending.append(sql)
+                text += "\n" + sql
+    return {t for t in tables if _mentions(text, t)}
 
 
-def _held_by(action: Any, held: dict[str, int], tables: list[str]) -> int | None:
+def _held_by(action: Any, held: dict[str, int], tables: list[str], queries: dict[str, str] | None = None) -> int | None:
     """Schritt der nicht ausgeführten Löschung, von der dieser Schritt abhängt (oder ``None``).
 
     Abhängig sind alle späteren DATEN-Schritte an derselben Tabelle: Hinzufügen/Importieren ergäbe doppelte Daten,
@@ -146,7 +162,7 @@ def _held_by(action: Any, held: dict[str, int], tables: list[str]) -> int | None
     und Abfrage-Definitionen ändern keine Daten – sie laufen weiter (Live-Fund 17.11.: Formularfilter „Golfclubs“)."""
     if not isinstance(action, _DATA_WRITES):
         return None
-    return next((held[t] for t in sorted(_tables_in(action, tables)) if t in held), None)
+    return next((held[t] for t in sorted(_tables_in(action, tables, queries)) if t in held), None)
 
 
 def _fingerprint(step: m.PlanStep) -> str:
@@ -259,6 +275,13 @@ class TaskPipeline:
         """Risikostufe mit Blick auf den TATSÄCHLICHEN Feldtyp: eine verlustfreie Typerweiterung (z. B. Kurzer → Langer
         Text) ist keine löschende Änderung. Unbekannter Ausgangstyp = die vorsichtige Einstufung bleibt."""
         action = step.action
+        if isinstance(action, m.UpdateRecords):
+            try:
+                target = self._access.schema().table(action.table)
+            except Exception:
+                target = None
+            if target is not None and target.linked:
+                return "destructive"  # Daten einer anderen Datei: nicht in der Sicherung enthalten
         if isinstance(action, m.ChangeFieldType) and action.size is None:
             try:
                 table = self._access.schema().table(action.table)
@@ -516,11 +539,12 @@ class TaskPipeline:
             # Hintergrundbetrieb: kein Dialog öffnet sich von selbst – löschende Schritte werden NIE automatisch
             # ausgeführt. Unabhängige, nicht löschende Schritte laufen trotzdem (Live-Fund „Golfclubs“: ein einzelner
             # Löschschritt sperrte den ganzen Plan); das Ergebnis bleibt „teilweise“, bis die Löschung bestätigt ist.
-            reason = "Der Plan enthält löschende Schritte – die werden nur bei geöffnetem Dashboard bestätigt."
+            reason = ("Alle Schritte sind nicht eindeutige Löschungen – nichts geändert (in Access von Hand erledigen "
+                      "oder die Aufgabe genauer fassen).")
             if len(destructive) == len(solution.plan.steps):
                 event("log", reason)
                 return finish("blockiert", reason)
-            event("log", f"{len(destructive)} löschende(r) Schritt(e) warten auf Bestätigung im Dashboard – die übrigen "
+            event("log", f"{len(destructive)} nicht eindeutige(r) löschende(r) Schritt(e) blockiert – die übrigen "
                          "Schritte werden ausgeführt.")
         else:
             decision = interaction.approve_plan(request)
@@ -570,7 +594,8 @@ class TaskPipeline:
                 current = self._access.schema(refresh=True)
                 check = self._validator.validate(m.ExecutionPlan.model_construct(steps=[step], notes=[]), current)
                 tables = [t.name.lower() for t in current.tables]
-                waits_for = _held_by(step.action, held, tables)
+                queries = {q.name.lower(): (q.sql or "").lower() for q in current.queries}
+                waits_for = _held_by(step.action, held, tables, queries)
                 if waits_for is not None:
                     result = StepResult(step_id=step.id, status="skipped", message=(
                         f"Übersprungen: setzt die nicht ausgeführte Löschung in Schritt {waits_for} voraus"))
@@ -578,12 +603,17 @@ class TaskPipeline:
                     result = StepResult(step_id=step.id, status="skipped",
                                         message="Übersprungen, passt nicht mehr zur Datenbank: " + check.errors[0].message)
                 elif isinstance(step.action, m.InsertRecords) and (earlier := self._storage.step_done_before(
-                        db_path, _fingerprint(step), task_id, prepared.task.text)) is not None and self._access.run(
-                        partial(records_present, table=step.action.table, records=step.action.records)):
-                    # erneuter Start DERSELBEN Aufgabe an derselben Datei, und ALLE verlangten Datensätze sind schon da:
-                    # nicht doppelt einfügen (fehlt einer, z. B. nach Wiederherstellung, wird normal eingefügt)
-                    result = StepResult(step_id=step.id, message=f"Bereits in Aufgabe {earlier} ausgeführt – nicht wiederholt",
-                                        details={"already_done": earlier})
+                        db_path, _fingerprint(step), task_id, prepared.task.text)) is not None and len(
+                        absent := self._access.run(partial(missing_records, table=step.action.table,
+                                                            records=step.action.records))) < len(step.action.records):
+                    # erneuter Start DERSELBEN Aufgabe an derselben Datei: vorhandene Datensätze nicht doppelt einfügen,
+                    # nur die fehlenden (z. B. nach Wiederherstellung oder wenn einer gelöscht wurde)
+                    if absent:
+                        step = step.model_copy(update={"action": step.action.model_copy(update={"records": absent})})
+                        result = self._run_step(step, interaction, recovery, cancel, event)
+                    else:
+                        result = StepResult(step_id=step.id, details={"already_done": earlier},
+                                            message=f"Bereits in Aufgabe {earlier} ausgeführt – nicht wiederholt")
                 else:
                     result = self._run_step(step, interaction, recovery, cancel, event)
                 verification: Verification | None = None
@@ -598,7 +628,7 @@ class TaskPipeline:
                 self._access.invalidate_schema()
                 if result.status == "skipped":
                     if self._risk(step) == "destructive":
-                        for table in _tables_in(step.action, tables):
+                        for table in _tables_in(step.action, tables, queries):
                             held.setdefault(table, step.id)
                     event("step_skipped", result.message, step.id)
                     continue
@@ -735,12 +765,12 @@ class TaskPipeline:
 
         # Destruktive Schritte: eigene Bestätigung zusätzlich zur Planfreigabe – außer in autorisierten Übungen mit
         # geprüfter Sicherung und eindeutigem Ziel (dort gilt weiter die Mengengrenze, max_affected bleibt gesetzt)
-        if self._risk(step) == "destructive" and step.id in self._auto_steps:
+        if self._risk(step) == "destructive" and step.id in self._auto_steps and self._auto_allowed(step, self._access.path):
             event("log", "Löschender Schritt automatisch ausgeführt (Übungsdatenbank, Sicherung geprüft): "
                          + self._impact(step)[0], step.id)
         elif self._risk(step) == "destructive":
             if not _can_ask(interaction):
-                return StepResult(step_id=step.id, status="skipped", message=_NO_DIALOG + "löschender Schritt nicht ausgeführt.")
+                return StepResult(step_id=step.id, status="skipped", message=_BLOCKED + "löschender Schritt nicht ausgeführt.")
             reason, exact = self._impact(step)
             if not interaction.confirm_step(step, reason):
                 return StepResult(step_id=step.id, status="skipped", message="Vom Benutzer nicht bestätigt")
@@ -785,7 +815,7 @@ class TaskPipeline:
                     state.mass_confirmed = True
                     if not _can_ask(interaction):
                         return StepResult(step_id=step.id, status="skipped", attempts=attempts,
-                                          message=f"{_NO_DIALOG}umfangreiche Änderung nicht ausgeführt ({exc.user_message})")
+                                          message=f"{_BLOCKED}umfangreiche Änderung nicht ausgeführt ({exc.user_message})")
                     if interaction.confirm_step(step, exc.user_message):
                         options.max_affected = None
                         continue
@@ -1013,6 +1043,7 @@ class TaskPipeline:
         try:
             schema = self._access.schema()
             linked = [t.name.lower() for t in schema.tables if t.linked]
+            queries = {q.name.lower(): (q.sql or "").lower() for q in schema.queries}
             if isinstance(action, m.DeleteRecords | m.UpdateRecords):
                 table = schema.table(action.table)
                 if not action.where or table is None or table.linked:
@@ -1023,7 +1054,11 @@ class TaskPipeline:
                 count = self._access.run(lambda e: e.tables.count_records(action.table, action.where))
                 return count <= self._policy.mass_change_threshold
             if isinstance(action, m.RunActionQuery):  # Mengengrenze prüft die Ausführung; nie verknüpfte Tabellen
-                return not _tables_in(action, linked) and not any(r.cascade_delete for r in schema.relations)
+                return not _tables_in(action, linked, queries) and not any(r.cascade_delete for r in schema.relations)
+            if isinstance(action, m.DeleteRelationship) and not action.name:
+                # ohne Namen nur, wenn genau EINE Beziehung zwischen den beiden Tabellen besteht
+                return sum(1 for r in schema.relations if r.table.lower() == (action.table or "").lower()
+                           and r.foreign_table.lower() == (action.foreign_table or "").lower()) == 1
             if isinstance(action, m.DeleteTable):
                 table = schema.table(action.name)
                 return table is not None and not table.linked

@@ -100,7 +100,7 @@ def test_lossless_type_widening_runs_in_background_but_narrowing_stops(tmp_path:
         assert h.access.run(lambda e: e.tables.field_type("Kunden", "Ort")) == AccessType.LONG_TEXT
         prepared = h.pipeline.prepare(CapturedTask(text="Ort wieder kurzer Text mit 50 Zeichen.", method="manual"))
         outcome = h.pipeline.execute(prepared, background)
-        assert outcome.status == "blockiert" and "löschende" in outcome.error
+        assert outcome.status == "blockiert" and "nicht eindeutige Löschungen" in outcome.error
         assert h.access.run(lambda e: e.tables.field_type("Kunden", "Ort")) == AccessType.LONG_TEXT
         assert background.requests == [] and background.confirmations == []
     finally:

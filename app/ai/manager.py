@@ -132,6 +132,7 @@ class ProviderManager:
 
         Wirft bei jedem Fehler – ein Erfolg wird nur gemeldet, wenn das Modell tatsächlich geantwortet hat.
         """
+        self._check_limit()  # auch der Verbindungstest ist eine (kleine) bezahlte Anfrage
         name = provider or self.settings.ai.provider
         client = self.provider(name)
         main = self.settings.ai.anthropic_model if name == "anthropic" else self.settings.ai.openai_model

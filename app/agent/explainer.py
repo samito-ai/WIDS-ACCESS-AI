@@ -28,7 +28,7 @@ STATUS_LABELS = {
     "geplant": "Geplant (nicht ausgeführt)",
     "blockiert": "Aus Sicherheitsgründen blockiert",
 }
-_RISK = {"safe": "", "modify": " _(ändert Bestehendes)_", "destructive": " **(destruktiv – eigene Bestätigung)**"}
+_RISK = {"safe": "", "modify": " _(ändert Bestehendes)_", "destructive": " **(löscht – nur mit Sicherung und eindeutigem Ziel)**"}
 
 
 def analysis_markdown(analysis: TaskAnalysis) -> str:

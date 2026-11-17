@@ -72,13 +72,16 @@ def _sha_for(release: dict) -> str:
 def pick_latest(releases: list[dict], current: str = __version__) -> Release | None:
     """Neueste Version aus dem offiziellen Repository, die neuer als ``current`` ist und eine prüfbare EXE hat."""
     candidates = []
+    stable = parse_version(current)[3] == _STAGES[""]
     for item in releases:
-        if item.get("draft"):
-            continue
+        if item.get("draft") or (stable and item.get("prerelease")):
+            continue  # eine Stable-Version bekommt nur Stable-Updates angeboten, nie Vorabversionen
         try:
             version = parse_version(str(item.get("tag_name", "")))
         except ValueError:
             continue
+        if stable and version[3] != _STAGES[""]:
+            continue  # auch ohne Vorab-Markierung auf GitHub: eine Beta-/RC-Nummer ist kein Stable-Update
         asset = next((a for a in item.get("assets", []) if a.get("name") == ASSET), None)
         if asset is None or version <= parse_version(current):
             continue
