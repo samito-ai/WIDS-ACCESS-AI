@@ -124,6 +124,8 @@ class QueryInfo(BaseModel):
 class ControlInfo(BaseModel):
     name: str
     control_type: int
+    #: Rahmenart: 0 transparent, 1 durchgezogen, 2 Striche, 3 kurze Striche, 4 Punkte … (-1 = nicht gelesen)
+    border_style: int = -1
     type_name: str = ""
     control_source: str = ""
     caption: str = ""

@@ -218,6 +218,28 @@ def _reflow_overlapping_rows(obj: Any, before: dict[str, tuple[int, int, int, in
             obj.Width = right_edge
 
 
+
+def _merge_cells(app: Any, obj: Any, name: str, object_type: int, ctl: Any, down: int, right: int) -> None:
+    """Steuerelement im Steuerelementlayout mit den LEEREN Zellen direkt darunter bzw. rechts daneben verbinden – mit
+    Access' eigenem Befehl „Zellen verbinden“ (eine größere Höhe allein ist KEINE verbundene Zelle). Gibt es nicht genug
+    leere Zellen, wird nichts verändert und der Grund gemeldet."""
+    layout = int(getattr(ctl, "LayoutID", 0) or 0)
+    if not layout:
+        raise AccessError(f"„{ctl.Name}“ liegt in keinem Steuerelementlayout – Zellen verbinden geht nur dort.")
+    empty = [x for x in obj.Controls if int(x.ControlType) == c.AC_EMPTY_CELL and int(x.LayoutID) == layout]
+    left, top, width = int(ctl.Left), int(ctl.Top), int(ctl.Width)
+    below = sorted((x for x in empty if abs(int(x.Left) - left) <= 30 and int(x.Top) > top), key=lambda x: int(x.Top))
+    beside = sorted((x for x in empty if abs(int(x.Top) - top) <= 30 and int(x.Left) >= left + width - 30),
+                    key=lambda x: int(x.Left))
+    if len(below) < down or len(beside) < right:
+        raise AccessError(f"Neben „{ctl.Name}“ gibt es nicht genug leere Layoutzellen (darunter {len(below)}, "
+                          f"rechts {len(beside)}; verlangt {down} bzw. {right}).")
+    picked = {str(ctl.Name), *(str(x.Name) for x in below[:down]), *(str(x.Name) for x in beside[:right])}
+    app.DoCmd.SelectObject(object_type, name, False)
+    for item in obj.Controls:
+        item.InSelection = str(item.Name) in picked
+    app.DoCmd.RunCommand(c.AC_CMD_LAYOUT_MERGE_CELLS)
+
 def _access_color(hex_color: str) -> int:
     """"#RRGGBB" → Access-Farbwert (BGR als Zahl)."""
     r, g, b = (int(hex_color[i:i + 2], 16) for i in (1, 3, 5))
@@ -1109,6 +1131,8 @@ class FormReportOps:
                     setattr(ctl, attr, raw)
             if change.control_source is not None:
                 ctl.ControlSource = change.control_source
+            if change.merge_down or change.merge_right:
+                _merge_cells(app, obj, name, object_type, ctl, change.merge_down or 0, change.merge_right or 0)
         delete = app.DeleteControl if object_type == c.AC_FORM else app.DeleteReportControl
         for wanted in deletes:
             delete(name, wanted)
@@ -1319,6 +1343,7 @@ class FormReportOps:
                 ("Height", "height"),
                 ("Layout", "layout"),
                 ("LayoutID", "layout_id"),
+                ("BorderStyle", "border_style"),
             ):
                 with contextlib.suppress(Exception):
                     setattr(info, target, int(getattr(control, attr)))

@@ -646,6 +646,9 @@ class ControlChange(StrictModel):
     locked: bool | None = None
     #: Datenbindung („Steuerelementinhalt“): Feldname oder Ausdruck mit führendem "=", z. B. "=[Preis]*[Menge]"
     control_source: str | None = None
+    #: im Steuerelementlayout mit so vielen LEEREN Zellen darunter bzw. rechts daneben verbinden („Zellen verbinden“)
+    merge_down: int | None = Field(default=None, ge=1, le=10)
+    merge_right: int | None = Field(default=None, ge=1, le=4)
 
 
 class SectionColorSpec(StrictModel):

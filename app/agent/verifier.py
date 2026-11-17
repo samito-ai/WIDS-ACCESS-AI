@@ -840,6 +840,14 @@ class ResultVerifier:
                       found.control_source)
             if found is not None:
                 _check_control_details(found, change, v)
+                if change.border_style is not None and found.border_style >= 0:
+                    v.add(f"Rahmenart „{change.name}“", found.border_style == change.border_style,
+                          f"{found.border_style} (verlangt {change.border_style})")
+                for wanted, axis, label in ((change.merge_down, "rows", "Zeilen"), (change.merge_right, "columns", "Spalten")):
+                    if wanted:
+                        covered = _cells_covered(found, controls, axis)
+                        v.add(f"„{change.name}“ über {wanted + 1} {label} verbunden", covered >= wanted + 1,
+                              f"reicht über {covered} {label}")
             if found is None or found.control_type not in (c.AC_TEXT_BOX, c.AC_COMBO_BOX):
                 continue  # diese Merkmale liest inspect nur bei Text-/Kombinationsfeldern
             flags = found.formatting.split(", ")
@@ -1348,6 +1356,17 @@ def _check_section_colors(info: Any, wanted: list[Any], v: Verification) -> None
         if spec.alternate_back_color:
             v.add(f"Alternative Hintergrundfarbe {spec.section}", alternate.lower() == spec.alternate_back_color.lower(),
                   alternate)
+
+
+def _cells_covered(target: Any, controls: list[Any], axis: str) -> int:
+    """Über wie viele Zeilen/Spalten seines Steuerelementlayouts reicht ein Steuerelement? Gemessen an den Anfängen der
+    anderen Zellen desselben Layouts (Access gibt Zeile/Spalte nicht preis)."""
+    cells = [x for x in controls if x.layout_id and x.layout_id == target.layout_id]
+    if axis == "rows":
+        starts, begin, size = sorted({x.top for x in cells}), target.top, target.height
+    else:
+        starts, begin, size = sorted({x.left for x in cells}), target.left, target.width
+    return sum(1 for start in starts if begin - 30 <= start < begin + size - 30)
 
 
 def _check_control_details(found: Any, change: Any, v: Verification) -> None:

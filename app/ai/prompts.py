@@ -133,9 +133,13 @@ Formulare und Berichte
   hide_detail?, groups?[GRUPPE wie bei create_report – vorhandene Ebene desselben Felds wird angepasst, sonst neu],
   controls?[wie bei create_report; group = Index der Gruppenebene im Bericht],
   control_changes?[{name(vorhandenes Steuerelement), left_cm?, top_cm?, width_cm?, caption?, bold?, font_size?,
-  fore_color?, format?, visible?, back_color?, italic?, height_cm?, border_style?(0 = Umrandung aus, 1 = durchgezogen),
-  border_width?(0–6), border_color?, transparent?(Hintergrund transparent), enabled?(false = nicht anklickbar),
-  locked?, control_source?(Datenbindung/„Steuerelementinhalt“: Feldname oder "=Ausdruck")}], delete_controls?[Steuer-
+  fore_color?, format?, visible?, back_color?, italic?, height_cm?, border_style?(0 = Umrandung aus, 1 = durchgezogen,
+  2 = Striche/„gestrichelt“, 3 = kurze Striche, 4 = Punkte/„gepunktet“), border_width?(0–6), border_color?,
+  transparent?(Hintergrund transparent), enabled?(false = nicht anklickbar), locked?, control_source?(Datenbindung/
+  „Steuerelementinhalt“: Feldname oder "=Ausdruck"), merge_down?/merge_right?(Anzahl LEERER Layoutzellen darunter/
+  rechts, mit denen das Steuerelement verbunden wird – „Bildfeld mit den Zellen darunter verbinden“; NIE stattdessen nur
+  height_cm vergrößern)}] – „Eingabefelder“ sind die Text-/Kombinationsfelder (Namen laut Formularaufbau), nie die
+  Bezeichnungsfelder; „Beschriftung ändern“ = caption des BEZEICHNUNGSFELDS (nicht des Textfelds), delete_controls?[Steuer-
   elementnamen], page_setup?(SEITE wie bei create_report), record_source?(neue Datenquelle: Tabelle, Abfrage oder
   SELECT), width_cm?(Berichtsbreite, z. B. schmäler für mehrere Spalten – Steuerelemente vorher einpassen),
   section_colors?[{section("detail"|"report_header"|"page_header"|"group_header"|"group_footer"|"page_footer"|
