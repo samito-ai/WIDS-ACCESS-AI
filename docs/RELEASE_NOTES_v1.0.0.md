@@ -44,6 +44,9 @@ mehrteilige Aufgaben. Details: README, Abschnitt „Unterstützte Aufgaben“.
   (Bericht im Spaltenlayout), Filterabfragen und Excel-Import (87 Datensätze): erfolgreich, ohne Rückfrage, nur die
   verlangten Daten geändert. Eine Übung mit schon vorhandener Abfrage: ehrlich „teilweise“, nichts überschrieben.
   Jede Sicherung war inhaltsgleich mit dem Ausgangsstand, jede Wiederherstellung stellte ihn exakt her.
+- **Echter Alt+W-Lauf mit KI in der 1.0.0-EXE** (te.comp-Workshop „CD-Sammlung“, Tabelle aus Excel mit den Excel-
+  Feldnamen): erfolgreich, ohne Fenster, Fokuswechsel oder Rückfrage, Sicherung vorher, 2 KI-Anfragen, 0,12 $.
+  Unabhängig nachgeprüft: 87 von 87 Zeilen, alle 8 Feldnamen identisch mit der Excel-Datei.
 - **EXE:** Selbsttest (auch ohne Python), 15/15 Hintergrundprüfungen (Infobereich, keine zweite Instanz, Kürzel,
   Alt+W ohne Fokuswechsel und ohne Dialog, sauberes Beenden, Neustart).
 - **Unabhängiges Codex-Review** des Beta-7-Stands und dieser Version: 10 Befunde. Laut Nachprüfung sind 7 vollständig
@@ -59,5 +62,5 @@ mehrteilige Aufgaben. Details: README, Abschnitt „Unterstützte Aufgaben“.
   verglichen; bei mehr als 50 000 Ergebniszeilen vergleicht die Abfrageprüfung nicht mehr; der Verbindungstest
   (ca. 0,001 $) erscheint nicht in der Kostenübersicht.
 - Getestet auf einem Windows-11-PC mit Access (Microsoft 365); ein zweiter PC stand nicht zur Verfügung.
-- Kein neuer kostenpflichtiger KI-Lauf für diese Version. Die Ausführung wurde mit den echten KI-Plänen früherer Läufe
-  an frischen Übungskopien mit echtem Access nachgeprüft.
+- Ein echter KI-Lauf mit 1.0.0 (te.comp-Workshop, siehe oben); weitere Aufgabentypen wurden mit den echten KI-Plänen
+  früherer Läufe nachgespielt, die KI-Anforderungsprüfung war dabei vorgegeben.
