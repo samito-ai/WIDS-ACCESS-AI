@@ -83,6 +83,9 @@ class ProviderManager:
         self._lock = threading.RLock()
 
     # ------------------------------------------------------------------ Anbieter
+    #: Aufgabe, der die nächsten Anfragen zugerechnet werden (Kosten je Aufgabe, Aufgabenbudget); None = keine
+    task_id: int | None = None
+
     def set_provider_for_testing(self, name: str, provider: AIProvider) -> None:
         self._providers[name] = provider
 
@@ -157,15 +160,30 @@ class ProviderManager:
     def usage(self, period: str = "month") -> UsageSummary:
         return self._storage.usage_summary(period) if self._storage else UsageSummary()
 
-    def _check_limit(self) -> None:
+    def _check_limit(self, model: str = "") -> None:
+        if self._storage is None:
+            return
+        task_limit = self.settings.ai.task_cost_limit_usd
+        limited = (task_limit > 0 and self.task_id is not None) or self.settings.ai.cost_limit_usd > 0
+        if limited and model and self.estimate_cost(model, 1, 1) is None:
+            raise CostLimitError(
+                f"Für das Modell „{model}“ ist kein Preis hinterlegt – das Kostenlimit ließe sich nicht einhalten. "
+                "Die Anfrage wurde nicht gesendet. Bitte ein Modell mit bekanntem Preis wählen oder die Kostenlimits "
+                "im Dashboard auf 0 setzen.")
+        if task_limit > 0 and self.task_id is not None:
+            spent_task = self._storage.usage_summary(task_id=self.task_id).cost_usd
+            if spent_task >= task_limit:
+                raise CostLimitError(
+                    f"Das Aufgabenbudget von {task_limit:.2f} $ ist erreicht (diese Aufgabe bisher {spent_task:.2f} $). "
+                    "Weitere KI-Anfragen für diese Aufgabe wurden gestoppt; bisherige Ergebnisse bleiben erhalten.")
         limit = self.settings.ai.cost_limit_usd
-        if limit <= 0 or self._storage is None:
+        if limit <= 0:
             return
         spent = self._storage.usage_summary(self.settings.ai.cost_limit_period).cost_usd
         if spent >= limit:
             raise CostLimitError(
                 f"Das Kostenlimit von {limit:.2f} $ ist erreicht (bisher {spent:.2f} $). "
-                "Die Anfrage wurde nicht gesendet. Das Limit lässt sich in den Einstellungen ändern."
+                "Die Anfrage wurde nicht gesendet. Das Limit lässt sich im Dashboard unter „API-Kosten“ ändern."
             )
 
     def _record(self, response: AIResponse, purpose: str) -> None:
@@ -179,6 +197,7 @@ class ProviderManager:
                 input_tokens=response.input_tokens,
                 output_tokens=response.output_tokens,
                 cost_usd=cost,
+                task_id=self.task_id,
             )
 
     # ------------------------------------------------------------------ Anfragen
@@ -194,7 +213,6 @@ class ProviderManager:
         cancel: threading.Event | None = None,
     ) -> AIResponse:
         """Sendet eine Anfrage mit Wiederholungen (exponentielles Backoff) bei vorübergehenden Fehlern."""
-        self._check_limit()
         provider = self.provider()
         request = AIRequest(
             system=system,
@@ -204,6 +222,7 @@ class ProviderManager:
             json_mode=json_mode,
             timeout_s=self.settings.ai.request_timeout_s,
         )
+        self._check_limit(request.model)
         attempts = max(1, self.settings.ai.max_retries + 1)
         last_error: ProviderError | None = None
         for attempt in range(1, attempts + 1):

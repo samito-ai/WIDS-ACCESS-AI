@@ -591,7 +591,7 @@ def test_correction_runs_several_rounds_while_making_progress(make: Any) -> None
     assert outcome.status == "erfolgreich", outcome.error
     assert len(fix_requests) == 2
     second = fix_requests[1].messages[-1].content
-    assert "Zyklus 1: Abfrage korrigieren: ausgeführt" in second and "danach noch offen: 3" in second
+    assert "Zyklus 1 (Ursache: KI-Plan): Abfrage korrigieren: ausgeführt" in second and "danach noch offen: 3" in second
     assert "qryOrte" in [q.name for q in h.access.run(lambda e: e.schema()).queries]
 
 
@@ -1011,7 +1011,7 @@ def test_diagnosis_shows_requirements_steps_checks_and_corrections(make: Any) ->
     diagnosis = report.split("## Diagnose (Anforderung → Schritte → Prüfung)", 1)[1]
     assert "Anforderungen erkannt: 3" in diagnosis and "Korrekturschritte: 1" in diagnosis
     assert "| 3 | Abfrage qryOrte | 1 ✅, 2 ✅ | 1: 7/7 ✓, 2: 4/4 ✓ | erfüllt" in diagnosis, diagnosis  # inkl. Ergebnisvergleich
-    assert "Zyklus 1: qryOrte anlegen: ausgeführt → danach noch offen: keine" in diagnosis
+    assert "Zyklus 1 (Ursache: KI-Plan): qryOrte anlegen: ausgeführt → danach noch offen: keine" in diagnosis
     assert outcome.corrections and h.storage.get_task(outcome.task_id).report_md == report
 
     off = make([solution([QUERY_TIROL])], automation__diagnostic_report=False)
@@ -1213,3 +1213,15 @@ def test_correction_never_inserts_the_same_records_twice(make: Any) -> None:
     assert h.access.run(lambda e: e.tables.count_records("Kunden", "Nachname = 'Neu'")) == 1
     assert outcome.status == "teilweise"
     assert any("Nicht wiederholt" in e.message for e in interaction.events)
+
+
+def test_task_binding_ends_with_the_task_and_costs_are_per_task(make: Any) -> None:
+    """Beta 3 (Codex-Fund): nach Planung und Ausführung gehören weitere KI-Anfragen (Chat, Systemtest) zu KEINER
+    Aufgabe mehr – sie dürfen weder deren Budget blockieren noch ihr zugerechnet werden."""
+    h = make([solution([{"title": "Abfrage erstellen", "action": QUERY_TIROL}])])
+    prepared, outcome, _ = run(h, TASK_TIROL)
+    assert outcome.status == "erfolgreich", outcome.error
+    ai = h.pipeline._analyzer._ai
+    assert ai.task_id is None, "Bindung nach der Ausführung gelöst"
+    per_task = h.storage.usage_summary(task_id=prepared.task_id)
+    assert per_task.requests >= 1 and per_task.cost_usd > 0

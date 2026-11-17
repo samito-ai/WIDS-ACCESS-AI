@@ -99,6 +99,9 @@ def _isolated_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Itera
     data = tmp_path / "wids-data"
     data.mkdir()
     monkeypatch.setenv("WIDS_DATA_DIR", str(data))
+    from app.core import updater
+
+    monkeypatch.setattr(updater, "check", lambda timeout=6.0: None)  # Tests fragen nie GitHub ab
     yield data
     # COM-Objekte, die noch in Ausnahme-Tracebacks des Tests hängen, sofort im Test-Thread freigeben
     gc.collect()

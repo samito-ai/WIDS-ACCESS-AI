@@ -202,6 +202,11 @@ def test_background_alt_w_runs_directly_without_any_approval(app_window: Any, qt
     assert record.status == "erfolgreich", record.error
     assert window.ctx.access.run(lambda e: e.queries.exists("qryDirekt"))
     assert window.overlay.state == "done" and not window.isVisible()
+    live = window.live.tracker  # Live-Fortschritt aus den echten Ereignissen dieses Laufs
+    assert not live.running and all(state == "done" for state in live.phases.values()), live.phases
+    assert (live.done_steps, live.total_steps) == (1, 1) and live.confirmed, live.confirmed
+    window.refresh_dashboard()
+    assert "Letzte Aufgabe (#" in window.costs.text.text() and "Diese Sitzung: 0." in window.costs.text.text()
 
 
 def test_no_approval_system_left_and_old_settings_still_load() -> None:
@@ -218,3 +223,57 @@ def test_no_approval_system_left_and_old_settings_still_load() -> None:
                         "trusted_databases": ["c:\\a.accdb"]}
     loaded = AppSettings.model_validate_json(json.dumps(old))
     assert not hasattr(loaded.security, "program_approvals") and loaded.security.block_in_exam_mode
+
+
+def test_dashboard_system_test_costs_updates_and_diagnosis(app_window: Any, qtbot: Any, tmp_path: Path,
+                                                           monkeypatch: pytest.MonkeyPatch) -> None:
+    """Beta 3: Systemtest (KI-Teil nur nach Zustimmung), Kostenlimits, Update-Hinweis, Diagnose nur bei Schwerem."""
+    from PySide6.QtWidgets import QFileDialog
+
+    from app.core import diagnostics, system_check, updater
+    from app.core.errors import DatabaseLockedError
+
+    window, _, messages = app_window
+    panel = window.maintenance
+    assert panel.btn_test.text() == "System && KI testen", "einfaches & wäre ein Kürzel-Zeichen und unsichtbar"
+    local = [system_check.CheckResult("Microsoft Access installiert", "ok", "gefunden")]
+    paid_calls: list[Any] = []
+    monkeypatch.setattr(system_check, "run_local", lambda progress=None: list(local))
+    monkeypatch.setattr(system_check, "run_paid", lambda ai: paid_calls.append(ai) or [
+        system_check.CheckResult("Anmeldung und Modell", "fail", "Schlüssel abgelaufen", True)])
+    answers = iter([QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes])
+    asked: list[str] = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: asked.append(a[2]) or next(answers))
+    panel.btn_test.click()
+    qtbot.waitUntil(lambda: panel.btn_test.isEnabled(), timeout=10000)
+    assert paid_calls == [] and "0.01 $" in asked[0], "ohne Zustimmung keine kostenpflichtige Anfrage"
+    assert "Bestanden (bereit) – KI-Teil nicht ausgeführt" in panel.system.text()
+    panel.btn_test.click()
+    qtbot.waitUntil(lambda: bool(paid_calls) and panel.btn_test.isEnabled(), timeout=10000)
+    assert "Fehlgeschlagen" in panel.system.text() and "Schlüssel abgelaufen" in panel.system.text()
+
+    window.costs.task_limit.setValue(0.25)
+    window.costs.period.setCurrentIndex(window.costs.period.findData("day"))
+    window.costs.limit.setValue(2)
+    window.costs.save()
+    saved = window.ctx.storage.load_settings().ai
+    assert (saved.task_cost_limit_usd, saved.cost_limit_period, saved.cost_limit_usd) == (0.25, "day", 2.0)
+
+    release = updater.Release("1.0.0-beta.9", "v1.0.0-beta.9", "Neu: X", "https://github.com/x", "a" * 64, "")
+    monkeypatch.setattr(updater, "check", lambda timeout=6.0: release)
+    panel.btn_check.click()
+    qtbot.waitUntil(lambda: panel.btn_check.isEnabled() and panel.btn_install.isVisibleTo(window), timeout=10000)
+    assert "1.0.0-beta.9" in panel.update_info.text() and "Neu: X" in panel.update_info.text()
+    panel.install_update()  # im Quellcode: Hinweis statt Download
+    assert "nur in der installierten EXE" in messages[-1]
+
+    assert diagnostics.latest_report() is None and not panel.btn_export.isEnabled()
+    window.show_error(DatabaseLockedError("gesperrt"))
+    assert diagnostics.latest_report() is None, "behebbarer Fehler: kein Diagnosebericht"
+    window.show_error(RuntimeError("kaputt"))
+    report = diagnostics.latest_report()
+    assert report is not None and panel.btn_export.isEnabled() and "RuntimeError: kaputt" in report.read_text("utf-8")
+    target = tmp_path / "export.md"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(target), ""))
+    panel.export_diagnose()
+    assert target.read_text("utf-8") == report.read_text("utf-8")

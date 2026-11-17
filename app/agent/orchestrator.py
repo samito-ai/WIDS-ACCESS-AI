@@ -41,6 +41,31 @@ log = get_logger(__name__)
 
 #: Höchstzahl der Selbstkorrektur-Zyklen nach der Anforderungsprüfung
 CORRECTION_ROUNDS = 3
+
+#: Einordnung, WARUM eine Aufgabe nicht vollständig gelöst ist – bestimmt, welchen anderen Weg die Korrektur sucht
+FAILURE_HINTS = {
+    "Access-Ausführung": "ein Schritt ließ sich in Access nicht ausführen – eine andere Access-Aktion bzw. andere "
+                         "Parameter wählen, nicht denselben Schritt wiederholen",
+    "Ergebnisprüfung": "der gespeicherte Zustand weicht von der Vorgabe ab – das vorhandene Objekt gezielt korrigieren "
+                       "(Eigenschaft, Bereich, Objekt prüfen), Richtiges unverändert lassen",
+    "KI-Plan": "alle Schritte liefen und bestanden ihre Prüfung, die Anforderung ist aber nicht erfüllt – der Plan "
+               "deckte sie nicht ab: fehlende bzw. andere Schritte ergänzen",
+    "Aufgabenerkennung": "der Aufgabentext ist vermutlich unvollständig erfasst – nur eindeutig Ableitbares planen und "
+                         "Unklares in den Notizen nennen",
+}
+
+
+def classify_failure(results: list[StepResult], failing_checks: list[str], pending: list[m.RequirementResult],
+                     task: m.CapturedTask) -> str:
+    """Ursache offener Punkte: Access-Ausführung, Ergebnisprüfung, KI-Plan oder Aufgabenerkennung."""
+    if any(r.status == "failed" for r in results):
+        return "Access-Ausführung"
+    if failing_checks:
+        return "Ergebnisprüfung"
+    if pending and task.method in ("ocr", "vision") and len(task.text.strip()) < 120 \
+            and all(r.status == "unklar" for r in pending):
+        return "Aufgabenerkennung"
+    return "KI-Plan"
 #: Datenschritte: nach einer nicht bestandenen Prüfung kein automatischer zweiter Weg (keine doppelten Datensätze)
 _DATA_ACTIONS = (m.InsertRecords, m.ImportData, m.ImportOdbc, m.UpdateRecords, m.DeleteRecords, m.RunActionQuery,
                  m.AttachFiles, m.TransferObjects)
@@ -255,10 +280,17 @@ class TaskPipeline:
     # ------------------------------------------------------------------ Phase 1: verstehen und planen
     def prepare(self, task: m.CapturedTask, *, cancel: threading.Event | None = None) -> PreparedTask:
         """Analysiert die Aufgabe und erstellt einen geprüften Plan. Verändert die Datenbank nicht."""
+        try:
+            return self._prepare(task, cancel=cancel)
+        finally:
+            self._analyzer.bind_task(None)  # spätere Fragen/Tests gehören zu keiner Aufgabe
+
+    def _prepare(self, task: m.CapturedTask, *, cancel: threading.Event | None = None) -> PreparedTask:
         db_path = self._access.path if self._access.is_connected else ""
         task_id = self._storage.create_task(
             raw_text=task.text, source=task.source or task.window_title, capture_method=task.method, db_path=db_path
         )
+        self._analyzer.bind_task(task_id)
         warnings = [*task.warnings, *self._policy.task_text_warnings(task.text)]
         classification = classify_task(task.text)
         self._storage.update_task(task_id, task_type=classification.task_type.value, status="erkannt")
@@ -329,6 +361,8 @@ class TaskPipeline:
             except Exception:  # z. B. Verlauf gesperrt/Datenträger voll: den ursprünglichen Fehler nicht verdecken
                 log.exception("Status der abgebrochenen Aufgabe %s nicht gespeichert", prepared.task_id)
             raise
+        finally:
+            self._analyzer.bind_task(None)
 
     def _execute(
         self, prepared: PreparedTask, interaction: Interaction, *, cancel: threading.Event | None = None
@@ -336,6 +370,7 @@ class TaskPipeline:
         started = time.perf_counter()
         cancel = cancel or threading.Event()
         task_id = prepared.task_id
+        self._analyzer.bind_task(task_id)
         solution = prepared.solution
         results: list[StepResult] = []
         verifications: list[Verification] = []
@@ -557,7 +592,7 @@ class TaskPipeline:
         if unverified:
             event("log", f"{len(unverified)} Schrittprüfung(en) nicht bestanden – WIDS prüft die Anforderungen und sucht "
                          "einen anderen Lösungsweg …")
-        event("log", "Prüfe jede Anforderung gegen den tatsächlichen Zustand der Datenbank …")
+        event("log", "Prüfe jede Anforderung gegen den tatsächlichen Zustand der Datenbank …", phase="check")
         try:
             report = self._analyzer.check_requirements(
                 task_text=prepared.task.text, requirements=solution.analysis.requirements,
@@ -575,7 +610,10 @@ class TaskPipeline:
                                       recovery, cancel, event, corrections, correction_steps, open_checks)
         # Ein späterer Schritt ANDERER Art am selben Objekt (z. B. Formular neu angelegt) kann ein früher bestätigtes
         # Ergebnis (z. B. bedingte Formatierung) zerstört haben → gegen den Endzustand neu prüfen
-        verifications.extend(self._reverify_touched([*solution.plan.steps, *correction_steps], results))
+        for fresh in self._reverify_touched([*solution.plan.steps, *correction_steps], results):
+            verifications.append(fresh)
+            if not fresh.passed:
+                event("verification", "Neuprüfung gegen den Endzustand nicht bestanden", fresh.step_id, passed=False)
         changes[:] = schema_diff(before, after)
         requirements[0] = report
         if report.unmet:
@@ -707,12 +745,14 @@ class TaskPipeline:
             if not (pending or failing) or not self._analyzer.available:
                 break
             own = _object_names(after) - _object_names(before)
+            cause = classify_failure(results, failing, pending, prepared.task)
             event("log", f"Korrekturzyklus {round_no}/{CORRECTION_ROUNDS}: {len(pending) + len(failing)} offene "
-                         "Anforderung(en)/Prüfung(en) – die KI ermittelt die Ursache …")
+                         f"Anforderung(en)/Prüfung(en), Ursache: {cause} – die KI sucht einen anderen Weg …",
+                  correction=round_no, cause=cause)
             try:
                 plan = self._analyzer.fix_requirements(
-                    task_text=prepared.task.text, unmet=[f"{r.number}. {r.requirement} [{r.status}] – {r.evidence}"
-                                                         for r in pending] + failing,
+                    task_text=prepared.task.text, unmet=[f"WIDS-Einordnung der Ursache: {cause} – {FAILURE_HINTS[cause]}"]
+                    + [f"{r.number}. {r.requirement} [{r.status}] – {r.evidence}" for r in pending] + failing,
                     schema=after, own_objects=own, attempts=history, images=prepared.task.images, cancel=cancel)
             except TaskCancelledError:
                 raise
@@ -785,7 +825,8 @@ class TaskPipeline:
             after, report = new_after, new_report  # die Datenbank hat sich geändert – nur die neue Prüfung gilt
             still = ", ".join([str(r.number) for r in report.results if r.status != "erfüllt"]
                               + [f"Prüfung Schritt {line.split(' ', 2)[1]}" for line in failing_after]) or "keine"
-            history.append(f"Zyklus {round_no}: " + "; ".join(outcomes) + f" → danach noch offen: {still}")
+            history.append(f"Zyklus {round_no} (Ursache: {cause}): " + "; ".join(outcomes)
+                           + f" → danach noch offen: {still}")
             if score_after < score_before:
                 event("log", f"Korrekturzyklus {round_no} hat das Ergebnis verschlechtert – keine weiteren Versuche.")
                 break

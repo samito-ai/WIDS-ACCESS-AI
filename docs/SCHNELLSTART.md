@@ -21,7 +21,8 @@ Benutzerkonto, keine Nutzungslimits und keine versteckten Gebühren**. Kosten en
 ## 3. Eigenen KI-Schlüssel einrichten
 1. Auf <https://console.anthropic.com> ein Konto anlegen, etwas Guthaben aufladen (z. B. 5 $) und unter
    **API Keys** einen Schlüssel erzeugen. Tipp: dort ein **Ausgabenlimit** setzen.
-2. In WIDS **Einstellungen** öffnen, den Schlüssel einfügen und **Verbindung testen** klicken.
+2. In WIDS **Einstellungen** öffnen, den Schlüssel einfügen und **Verbindung testen** klicken. Wer möchte, klickt
+   danach im Dashboard **System & KI testen** (der KI-Teil kostet höchstens 0,01 $ und startet erst nach Rückfrage).
 3. Der Schlüssel wird verschlüsselt in Windows gespeichert und nie weitergegeben. **Schlüssel nie teilen** –
    jede Person braucht ihren eigenen.
 
@@ -40,7 +41,9 @@ WIDS im Hintergrund nie aus – dafür das Dashboard öffnen und bestätigen.
 - **Roter Punkt:** Dashboard → Verlauf öffnen; dort steht der Grund.
 - **„kein Guthaben“:** in der Anthropic-Konsole Guthaben aufladen.
 - **Alt+W reagiert nicht:** prüfen, ob das WIDS-Symbol unten rechts da ist; sonst WIDS neu starten.
-- Fehler bitte mit dem Bericht aus dem Verlauf melden (ohne Schlüssel!).
+- **Neue Version:** erscheint im Dashboard („Update installieren“) – wird geprüft und nach Zustimmung installiert.
+- Fehler bitte mit dem Bericht aus dem Verlauf melden (ohne Schlüssel!). Bei schweren Fehlern gibt es im Dashboard
+  **Diagnose exportieren** – der Bericht enthält keine Schlüssel, Namen, Pfade oder Datenbankinhalte.
 
 ## Unterstützen
 WIDS bleibt kostenlos. Wer möchte, kann freiwillig etwas beitragen – es ist nie Voraussetzung für die Nutzung.

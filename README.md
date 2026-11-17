@@ -1,6 +1,6 @@
 # WIDS ACCESS AI
 
-**Version 1.0.0 Beta 2** · Windows · Microsoft Access · Anthropic Claude · kostenlos, Open Source ([MIT](LICENSE))
+**Version 1.0.0 Beta 3** · Windows · Microsoft Access · Anthropic Claude · kostenlos, Open Source ([MIT](LICENSE))
 
 > KI-Assistent für Microsoft-Access-**Übungen**: Aufgabe erkennen → Lösung planen → Sicherung → in Access ausführen →
 > jede Anforderung unabhängig prüfen → Diagnosebericht. Funktioniert mit jeder Access-Datei, egal wie sie heißt.
@@ -30,6 +30,16 @@
 - **Keine Freigaben mehr nötig:** Alt+W ist die bewusste Aktion des Benutzers – kein Freigeben von
   Lernprogrammen, Workshops oder Dateien, keine Ablaufzeiten. Prüfungsschutz, Sicherung vor jeder Änderung und
   die Bestätigung löschender Schritte bleiben
+- **System & KI testen** (Dashboard): kostenloser Teil auf einer temporären Testdatenbank (Access, COM/DAO,
+  Erkennung, sicherer Testplan, unabhängige Prüfung, Sicherung); der KI-Teil (höchstens 0,01 $) startet erst nach
+  Bestätigung. Ergebnis: Bestanden, Teilweise oder Fehlgeschlagen mit konkreter Ursache
+- **Live-Fortschritt** im Dashboard aus den echten Arbeitsschritten: erkannt → verbunden → KI analysiert → Plan →
+  Schritt k von n → Ergebnisprüfung, mit Laufzeit, bestätigten Teilergebnissen und Selbstkorrektur-Status
+- **Selbstkorrektur mit Ursache:** Aufgabenerkennung, KI-Plan, Access-Ausführung oder Ergebnisprüfung – gezielt nur
+  das Nötige nachbessern, bestätigte Schritte bleiben, höchstens 3 begründete Zyklen
+- **Automatische Updates** aus diesem Repository: Hinweis im Dashboard, Download erst nach Zustimmung, SHA-256-Prüfung,
+  Selbsttest, Austausch beim Neustart, Rückfall auf die bisherige Version bei Problemen
+- **Diagnose** nur bei schwerwiegenden Fehlern, anonymisiert, „Diagnose exportieren“ im Dashboard
 - **Unabhängig vom Dateinamen:** „Datenbank1.accdb“, „CD-Sammlung“ oder nummerierte Übungsdateien, auch auf
   Netzlaufwerken
 
@@ -42,12 +52,17 @@
 3. Starten. Die EXE ist **nicht signiert** – Windows SmartScreen kann warnen („Weitere Informationen“ →
    „Trotzdem ausführen“).
 
+**Updates:** Ab Beta 3 meldet das Dashboard neue Versionen und installiert sie nach Zustimmung selbst. Wer noch
+Beta 1 oder Beta 2 nutzt, lädt Beta 3 **einmal von Hand** herunter (alte Instanz über das Infobereich-Symbol beenden,
+EXE ersetzen) – Einstellungen, Schlüssel und Verlauf bleiben erhalten.
+
 Voraussetzungen: Windows 10/11, Microsoft Access (Desktop), ein eigener Anthropic-API-Schlüssel.
 
 ## Schnellstart
 
 1. **Einstellungen** öffnen, den Anthropic-Schlüssel einfügen und **Verbindung testen** klicken.
    Anleitung: [API-Schlüssel sicher einrichten](docs/INSTALLATION.md#anthropic-api-schlüssel-sicher-einrichten).
+   Optional im Dashboard **System & KI testen** klicken.
 2. Die Übung in Access öffnen und **Alt+W** drücken – keine weitere Freigabe nötig.
 3. Ergebnis und Diagnosebericht im Dashboard ansehen.
 
@@ -58,8 +73,11 @@ Ausführlich: [Installation und Einrichtung](docs/INSTALLATION.md).
 ## Kosten
 
 WIDS selbst ist kostenlos. Die KI-Anfragen laufen über **deinen eigenen** Anthropic-Schlüssel und werden von
-Anthropic nach Verbrauch abgerechnet. WIDS zeigt die geschätzten Kosten je Aufgabe im Verlauf an; ein Kostenlimit
-lässt sich in den Einstellungen setzen.
+Anthropic nach Verbrauch abgerechnet. Das Dashboard zeigt die Kosten der letzten Aufgabe, der Sitzung, von heute und
+gesamt (lokaler Verlauf), das Modell und die Tokens. Die Tokens stammen aus den API-Antworten, die Kosten sind daraus mit
+den Listenpreisen berechnet (Schätzung – maßgeblich ist die Abrechnung des Anbieters); das Guthaben beim Anbieter kann
+WIDS nicht abrufen. Ein **Budget je Aufgabe** (Standard 1 $) und ein Limit je Tag/Monat/gesamt werden vor jeder
+Anfrage geprüft – eine lokale Vorsichtsmaßnahme, keine Abrechnungsgarantie.
 
 ## Sicherheit und Datenschutz
 

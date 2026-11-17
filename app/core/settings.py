@@ -29,6 +29,8 @@ class AISettings(BaseModel):
     use_vision: bool = True
     cost_limit_usd: float = 0.0
     cost_limit_period: Literal["day", "month", "total"] = "month"
+    #: Höchstbetrag je Aufgabe (lokale Vorsichtsgrenze, keine Abrechnungsgarantie); 0 = ohne Grenze
+    task_cost_limit_usd: float = 1.0
     #: Preise je Modell; unbekannte Modelle werden ohne Kosten ausgewiesen
     prices: dict[str, ModelPrice] = Field(
         default_factory=lambda: {
@@ -36,6 +38,7 @@ class AISettings(BaseModel):
             "claude-opus-5-5": ModelPrice(input=4.0, output=20.0),
             "claude-sonnet-5-5": ModelPrice(input=2.0, output=10.0),
             "claude-haiku-5-5": ModelPrice(input=0.10, output=0.50),
+            "gpt-5": ModelPrice(input=1.25, output=10.0),
         }
     )
 

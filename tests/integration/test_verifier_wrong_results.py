@@ -42,6 +42,23 @@ def test_right_columns_wrong_criteria_are_rejected(engine: AccessEngine) -> None
         {"field": "Nachname"}, {"field": "Bundesland", "criteria": "\"Tirol\""}]}})
     engine.queries.create_query("qryTirol", "SELECT Nachname, Bundesland FROM Kunden WHERE Bundesland=\"Wien\"")
     assert "Ergebnis wie verlangt" in _failed(engine, step, StepResult(step_id=1, final_name="qryTirol"))
+
+
+def test_result_comparison_still_runs_when_database_is_opened_exclusively(engine: AccessEngine,
+                                                                         monkeypatch: pytest.MonkeyPatch) -> None:
+    """Beta-3-Live-Fund: ist die Datei exklusiv geöffnet, scheitert die zweite DAO-Verbindung – der Vergleich darf
+    trotzdem nicht entfallen (Rückfall auf die bestehende Verbindung), eine falsche Bedingung fällt weiter auf."""
+    from app.core.errors import AccessError
+
+    def locked(*a: Any, **k: Any) -> Any:
+        raise AccessError("Die Datenbank wurde in einen Status versetzt, in dem sie nicht geöffnet werden kann.")
+
+    monkeypatch.setattr(engine.queries, "run_select_isolated", locked)
+    step = _step({"action": "create_query", "name": "qryTirol", "spec": {"tables": ["Kunden"], "fields": [
+        {"field": "Nachname"}, {"field": "Bundesland", "criteria": "\"Tirol\""}]}})
+    engine.queries.create_query("qryTirol", "SELECT Nachname, Bundesland FROM Kunden WHERE Bundesland=\"Wien\"")
+    failed = _failed(engine, step, StepResult(step_id=1, final_name="qryTirol"))
+    assert "Ergebnis wie verlangt" in failed and "Verlangtes Ergebnis vergleichbar" not in failed
     engine.queries.create_query("qryTirol", AccessExecutor().resolve_sql(step.action, engine.schema()), replace=True)
     assert _failed(engine, step, StepResult(step_id=1, final_name="qryTirol")) == []
 

@@ -15,6 +15,17 @@
 2. Starten. Windows SmartScreen kann bei einer neuen, unsignierten EXE warnen („Weitere Informationen → Trotzdem
    ausführen“) – nur bei einer EXE aus dem offiziellen Release tun und die SHA-256-Prüfsumme vergleichen.
 3. Optional in den Einstellungen „Mit Windows starten (im Hintergrund)“ aktivieren.
+4. Optional im Dashboard **„System & KI testen“** klicken: zuerst ein kostenloser Test auf einer temporären
+   Testdatenbank, danach – nur nach Bestätigung – ein KI-Test mit höchstens 0,01 $.
+
+### Updates
+Ab Beta 3 prüft WIDS beim Start (still, ohne Internet einfach nicht) die Releases dieses Repositorys. Eine neue Version
+erscheint im Dashboard unter „System, Updates & Diagnose“; **„Update installieren“** lädt die EXE erst nach Zustimmung,
+prüft sie gegen die veröffentlichte SHA-256-Prüfsumme, startet sie testweise und ersetzt dann die laufende EXE. Die
+bisherige Version bleibt als `WIDS-Access-AI.vorher.exe` liegen, bis die neue eine Minute stabil läuft; startet die
+neue nicht, wird die bisherige automatisch zurückgelegt. Einstellungen, Schlüssel und Verlauf bleiben unverändert.
+Von **Beta 1/Beta 2** auf Beta 3 einmal von Hand aktualisieren: alte Instanz über das Infobereich-Symbol → „Beenden“,
+EXE durch die neue ersetzen, starten.
 
 ## Variante B: aus dem Quellcode
 ```powershell
@@ -35,8 +46,10 @@ Eigene EXE bauen: `python build.py` (PyInstaller, inklusive Selbsttest).
    mit Windows-DPAPI für dein Benutzerkonto **verschlüsselte** Datei unter `%LOCALAPPDATA%\WIDS-Access-AI` (die
    Einstellungen zeigen, welche Ablage aktiv ist). Nie im Klartext, nie im Verlauf oder Protokoll. Entfernen:
    Systemsteuerung → Anmeldeinformationsverwaltung → Windows-Anmeldeinformationen (bzw. in WIDS „Schlüssel löschen“).
-4. Zusätzlich in WIDS ein **Kostenlimit** setzen (Einstellungen → KI → Kostenlimit pro Tag/Monat). Eine typische
-   Übung kostet etwa 0,05–0,35 $.
+4. Die **Kostenlimits** stehen im Dashboard unter „API-Kosten“: Budget je Aufgabe (Standard 1 $) und ein Limit je
+   Tag/Monat/gesamt. Eine typische Übung kostet etwa 0,05–0,35 $. Die Limits sind eine lokale Vorsichtsmaßnahme
+   (berechnet aus Tokens × Listenpreis), keine Abrechnungsgarantie – das Ausgabenlimit in der Anthropic-Konsole
+   bleibt der verlässliche Schutz.
 5. Den Schlüssel **nie** weitergeben, in Screenshots zeigen oder in Issues/Repositories einfügen. Bei Verdacht sofort in
    der Anthropic-Konsole widerrufen.
 

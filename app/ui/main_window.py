@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
-    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -31,6 +30,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QSplitter,
     QStackedWidget,
@@ -50,13 +50,14 @@ from app.agent.orchestrator import ApprovalDecision, ApprovalRequest, PipelineEv
 from app.ai.base import ChatMessage
 from app.ai.manager import PROVIDER_LABELS, ConnectionCheck
 from app.automation.hotkeys import HotkeyManager, parse
-from app.core import autostart
+from app.core import autostart, diagnostics
 from app.core.context import AppContext
 from app.core.errors import HotkeyError, TaskCancelledError, WidsError
 from app.core.logging_setup import get_logger
 from app.tasks.models import TASK_TYPE_LABELS, CapturedTask, PlanStep, TaskType
 from app.ui import theme
 from app.ui.compact import CompactWindow, app_icon
+from app.ui.dashboard_panels import CostView, MaintenanceView, ProgressView, card
 from app.ui.overlay import StatusOverlay
 from app.vision.capture import TECOMP_PROCESS
 
@@ -115,14 +116,6 @@ class Bridge(QObject):
         self.pipeline_event.emit(event)
 
 
-def card(title: str) -> tuple[QFrame, QVBoxLayout]:
-    frame = QFrame(objectName="card")
-    layout = QVBoxLayout(frame)
-    label = QLabel(title, objectName="muted")
-    layout.addWidget(label)
-    return frame, layout
-
-
 def button(text: str, slot: Callable[[], Any], name: str = "") -> QPushButton:
     btn = QPushButton(text, objectName=name)
     btn.clicked.connect(slot)
@@ -147,6 +140,7 @@ class MainWindow(QMainWindow):
         self.destroyed.connect(self.overlay.deleteLater)  # eigenes Fenster ohne Eltern
         self.tray_state = "idle"
         self._quitting = False
+        self.restart_after_quit = False  # nach einem installierten Update: neue EXE starten, sobald diese beendet ist
 
         self.bridge = Bridge(self)
         self.bridge.ask.connect(self._on_ask, Qt.ConnectionType.BlockingQueuedConnection)
@@ -201,6 +195,8 @@ class MainWindow(QMainWindow):
         # im Hintergrund nichts abfragen (ressourcenschonend); beim Öffnen wird über _show_page aktualisiert
         self._timer.timeout.connect(lambda: self.refresh_dashboard() if self.isVisible() else None)
         self._timer.start()
+        # an das Fenster gebunden (entfällt, wenn es vorher geschlossen wird); ohne Internet: still weiter
+        QTimer.singleShot(8000, self, lambda: self.maintenance.check_updates(quiet=True))
 
     # ------------------------------------------------------------------ Infrastruktur
     def apply_theme(self) -> None:
@@ -292,7 +288,22 @@ class MainWindow(QMainWindow):
         signals.failed.connect(lambda exc: finish(failed or self.show_error, exc))
         QThreadPool.globalInstance().start(_Job(func, signals))
 
+    def report_severe(self, category: str, component: str, message: str, *, attempts: list[str] | None = None,
+                      outcome: str = "", task_id: int | None = None) -> None:
+        """Schwerwiegender Fehler → Diagnosebericht (ohne Meldung; „Diagnose exportieren“ im Dashboard)."""
+        try:
+            path = diagnostics.write_report(category, component, message, attempts=attempts, outcome=outcome,
+                                            task_id=task_id)
+            log.warning("Diagnosebericht geschrieben: %s", path.name)
+        except Exception:  # der Bericht darf den eigentlichen Fehler nie verdecken
+            log.exception("Diagnosebericht konnte nicht geschrieben werden")
+        self.maintenance.refresh_diagnose()
+
     def show_error(self, exc: Exception) -> None:
+        severe = diagnostics.classify(exc)
+        if severe is not None:
+            self.report_severe(*severe, f"{type(exc).__name__}: {getattr(exc, 'detail', '') or exc}",
+                               outcome="nicht automatisch behebbar – Vorgang abgebrochen")
         if isinstance(exc, WidsError):
             log.warning("%s: %s", type(exc).__name__, exc.detail or exc.user_message)
             message = exc.user_message
@@ -376,19 +387,33 @@ class MainWindow(QMainWindow):
             self.capture_task(then="execute" if name == "solve" else "analyze")
 
     # ------------------------------------------------------------------ Dashboard
-    def _build_dashboard(self, layout: QVBoxLayout) -> None:
-        layout.addWidget(QLabel("Dashboard", objectName="title"))
+    def _build_dashboard(self, page_layout: QVBoxLayout) -> None:
+        page_layout.addWidget(QLabel("Dashboard", objectName="title"))
+        scroll = QScrollArea(widgetResizable=True, frameShape=QFrame.Shape.NoFrame)
+        inner = QWidget()
+        layout = QVBoxLayout(inner)
+        layout.setContentsMargins(0, 0, 0, 0)
+        scroll.setWidget(inner)
+        page_layout.addWidget(scroll, 1)
         grid = QGridLayout()
         self.dash: dict[str, QLabel] = {}
         for index, (key, title) in enumerate([
             ("access", "Access-Verbindung"), ("db", "Aktive Übungsdatenbank"), ("task", "Letzte erkannte Aufgabe"),
-            ("ai", "KI-Anbieter und Modell"), ("auto", "Automatisierung"), ("usage", "KI-Verbrauch (Monat)"),
+            ("ai", "KI-Anbieter und Modell"), ("auto", "Automatisierung"),
         ]):
             frame, box = card(title)
             self.dash[key] = QLabel("–", objectName="value", wordWrap=True)
             box.addWidget(self.dash[key])
             grid.addWidget(frame, index // 3, index % 3)
+        self.live = ProgressView(self)
+        grid.addWidget(self.live.frame, 1, 2)
         layout.addLayout(grid)
+        self.costs = CostView(self)
+        self.maintenance = MaintenanceView(self)
+        row = QHBoxLayout()
+        row.addWidget(self.costs.frame, 1)
+        row.addWidget(self.maintenance.frame, 1)
+        layout.addLayout(row)
         actions = QHBoxLayout()
         actions.addWidget(button("Geöffnete Access-Datenbank verbinden", self.attach_running, "primary"))
         actions.addWidget(button("Datenbankdatei öffnen …", self.open_file))
@@ -402,6 +427,7 @@ class MainWindow(QMainWindow):
         box.addWidget(self.dash_tasks)
         self.dash_stats = QLabel("", objectName="muted", wordWrap=True)
         box.addWidget(self.dash_stats)
+        self.dash_tasks.setMinimumHeight(140)
         layout.addWidget(frame, 1)
 
     def refresh_dashboard(self) -> None:
@@ -422,9 +448,7 @@ class MainWindow(QMainWindow):
         else:
             hotkey_text = f"{hk.solve} lösen · {hk.cancel} abbrechen · {hk.dashboard} Dashboard · {hk.settings} Einstellungen"
         self.dash["auto"].setText(("läuft …" if self._busy else "bereit") + f"\n{hotkey_text}")
-        usage = ctx.ai.usage("month")
-        cost = f"{usage.cost_usd:.2f} $" + (" (teils ohne Preis)" if usage.unpriced_requests else "")
-        self.dash["usage"].setText(f"{usage.requests} Anfragen · {usage.input_tokens + usage.output_tokens:,} Tokens\n{cost}".replace(",", "."))
+        self.costs.refresh()
         self.dash_tasks.clear()
         for task in tasks:
             label = STATUS_LABELS.get(task.status, task.status)
@@ -498,6 +522,9 @@ class MainWindow(QMainWindow):
             return
         self._cancel = threading.Event()  # gilt für die ganze Kette Erfassen → Analysieren → Ausführen
         self.set_busy(True, "Aufgabe wird gelesen …")
+        self.live.tracker.start()
+        self.live.tracker.mark("Aufgabenstellung erkannt", "active")
+        self.live.render()
 
         def done(task: CapturedTask) -> None:
             self._captured = task
@@ -507,6 +534,8 @@ class MainWindow(QMainWindow):
             how = {"tecomp": "aus der te.comp-Aufgabenseite", "ocr": f"per OCR aus „{task.source}“"}.get(
                 task.method, f"per KI-Bilderkennung aus „{task.source}“")
             self.set_busy(False, f"Aufgabe {how} erfasst. {hint}")
+            self.live.tracker.mark("Aufgabenstellung erkannt")
+            self.live.render()
             if self._cancel.is_set():
                 self._cancelled()
             elif then == "none":
@@ -520,6 +549,7 @@ class MainWindow(QMainWindow):
 
         def failed(exc: Exception) -> None:
             self.set_busy(False)
+            self._progress_end(getattr(exc, "user_message", "") or str(exc), "error")
             self.bring_to_front(1)
             self.show_error(exc)
 
@@ -529,6 +559,11 @@ class MainWindow(QMainWindow):
         """Nach einem Abbruch wird nichts mehr gestartet – auch kein bereits geplanter Folgeschritt."""
         self.set_busy(False, "Abgebrochen – es wurde nichts weiter ausgeführt.")
         self.compact.log.addItem("■ Abgebrochen")
+        self._progress_end("Abgebrochen – es wurde nichts weiter ausgeführt.", "idle")
+
+    def _progress_end(self, text: str, state: str) -> None:
+        if self.live.tracker.running:
+            self.live.finish_and_render(text, state)
 
     def import_image(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Bild mit Aufgabenstellung", "", "Bilder (*.png *.jpg *.jpeg *.bmp)")
@@ -548,6 +583,7 @@ class MainWindow(QMainWindow):
             self._cancelled()
             return
         self.set_busy(False)
+        self._progress_end(getattr(exc, "user_message", "") or f"{type(exc).__name__}: {exc}", "error")
         self.show_error(exc)
 
     def analyze(self, execute: bool, task: CapturedTask | None = None, *, fresh: bool = True) -> None:
@@ -566,11 +602,28 @@ class MainWindow(QMainWindow):
         self._prepared = None
         self.task_log.clear()
         self.set_busy(True, "Die KI analysiert die Aufgabe und erstellt einen Plan …")
+        tracker = self.live.tracker
+        if not tracker.running:
+            tracker.start()
+        tracker.mark("Aufgabenstellung erkannt")
+        tracker.mark("KI analysiert Anforderungen", "active")
+        self.live.render()
 
         def done(prepared: PreparedTask) -> None:
             self._prepared = prepared
             self._render_prepared(prepared)
             answered = prepared.solution.plan.is_empty
+            if self.ctx.access.is_connected:
+                tracker.mark("Datenbank verbunden")
+            tracker.mark("KI analysiert Anforderungen")
+            if answered:
+                self._progress_end("Beantwortet – keine Änderungen an der Datenbank nötig.", "ok")
+            elif execute and not self._cancel.is_set():
+                tracker.plan(len(prepared.solution.plan.steps))
+                self.live.render()
+            else:
+                tracker.mark("Lösungsplan erstellt")
+                self._progress_end("Plan erstellt – wartet auf „Plan ausführen“.", "ok")
             self.set_busy(False, "Beantwortet – keine Änderungen an der Datenbank nötig." if answered
                           else "Plan erstellt. Mit „Plan ausführen“ freigeben.")
             if self._cancel.is_set():  # Abbruch während der Analyse: der fertige Plan wird NICHT ausgeführt
@@ -608,6 +661,10 @@ class MainWindow(QMainWindow):
         if fresh:
             self._cancel = threading.Event()
         self.set_busy(True, "Warte auf Freigabe …")
+        if not self.live.tracker.running:  # Klick auf „Plan ausführen“ nach einer reinen Analyse
+            self.live.tracker.resume()
+            self.live.tracker.plan(len(prepared.solution.plan.steps))
+            self.live.render()
         self.progress.setRange(0, len(prepared.solution.plan.steps))
         self.progress.setValue(0)
 
@@ -626,6 +683,13 @@ class MainWindow(QMainWindow):
             else:  # fehlgeschlagen/blockiert
                 self.set_busy(False, text)
                 self.notify(text.splitlines()[0])
+            self._progress_end(text, {"erfolgreich": "ok", "fehlgeschlagen": "error", "blockiert": "error"}.get(
+                outcome.status, "review" if outcome.status in ("unklar", "ausgeführt", "teilweise") else "idle"))
+            if outcome.status == "fehlgeschlagen":  # auch nach der Selbstkorrektur nicht lösbar: Diagnosebericht
+                self.report_severe("Nicht behebbarer Aufgabenfehler", "Ausführung", outcome.error or text,
+                                   attempts=outcome.corrections, outcome="Selbstkorrektur ohne Erfolg; Sicherung vor "
+                                   f"der Ausführung: {Path(outcome.backup_path).name if outcome.backup_path else '–'}",
+                                   task_id=outcome.task_id)
             self.refresh_dashboard()
 
         self.run_async(lambda: self.ctx.pipeline.execute(prepared, self.bridge, cancel=self._cancel), done, self._task_failed)
@@ -645,6 +709,9 @@ class MainWindow(QMainWindow):
             self.task_status.setText(f"{prefix}{event.message}")
         if event.kind in ("step_done", "step_failed", "step_skipped"):
             self.progress.setValue(self.progress.value() + 1)
+        if self.live.tracker.running:
+            self.live.tracker.on_event(event.kind, event.message, event.step_id, event.data)
+            self.live.render()
 
     def _on_ask(self, kind: str, payload: Any, holder: dict[str, Any]) -> None:
         """Rückfragen der Pipeline (Freigabe, Löschbestätigung, Namenskonflikt) – nur bei geöffnetem Dashboard, nie
@@ -949,13 +1016,11 @@ class MainWindow(QMainWindow):
         self.set_key.setAccessibleName("API-Schlüssel")
         self.set_key.returnPressed.connect(self.save_key)
         self.set_provider.currentIndexChanged.connect(self._show_key_state)
-        self.set_cost_limit = QDoubleSpinBox(maximum=10000, decimals=2, value=s.ai.cost_limit_usd, suffix=" $")
         form.addRow("Anbieter", self.set_provider)
         form.addRow("Claude-Modell", self.set_model_anthropic)
         form.addRow("OpenAI-Modell", self.set_model_openai)
         form.addRow("", self.set_auto_model)
         form.addRow("API-Schlüssel", self.set_key)
-        form.addRow("Kostenlimit/Monat (0 = aus)", self.set_cost_limit)
         box.addLayout(form)
         row = QHBoxLayout()
         row.addWidget(button("Schlüssel speichern", self.save_key))
@@ -1107,7 +1172,6 @@ class MainWindow(QMainWindow):
         s.ai.anthropic_model = self.set_model_anthropic.text().strip() or s.ai.anthropic_model
         s.ai.openai_model = self.set_model_openai.text().strip() or s.ai.openai_model
         s.ai.auto_model_selection = self.set_auto_model.isChecked()
-        s.ai.cost_limit_usd = self.set_cost_limit.value()
         s.ai.use_vision = self.set_vision.isChecked()
         s.automation.check_requirements = self.set_check_req.isChecked()
         s.automation.diagnostic_report = self.set_diagnostic.isChecked()

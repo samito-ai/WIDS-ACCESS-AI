@@ -3,7 +3,40 @@
 Alle wichtigen Änderungen an WIDS ACCESS AI. Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/),
 Versionen nach [Semantic Versioning](https://semver.org/lang/de/).
 
-## [1.0.0b2] – 2026-11-15 (vorbereitet, noch nicht veröffentlicht)
+## [1.0.0b3] – 2026-11-17
+
+### Neu
+- **System & KI testen** im Dashboard: kostenloser Teil (Access installiert, temporäre Testdatenbank, COM/DAO,
+  Erkennung der geöffneten Übung, sicherer Testplan, unabhängige Prüfung, Sicherung und Bereinigung – echte
+  Datenbanken werden nie angefasst) und – erst nach Bestätigung – KI-Teil mit höchstens 0,01 $ (Schlüssel, Anmeldung,
+  Modell, eine gezählte Anfrage mit höchstens 64 Ausgabetokens, Verarbeitung). Ergebnis bereit/eingeschränkt/
+  fehlgeschlagen mit konkreter Ursache.
+- **Live-Fortschritt** aus echten Pipeline-Ereignissen (Phasen, Schritt k von n, erledigt/offen, bestätigte
+  Teilergebnisse, Laufzeit, Selbstkorrektur-Zyklus mit Ursache); eine spätere fehlgeschlagene Neuprüfung nimmt eine
+  Bestätigung zurück.
+- **Selbstkorrektur ordnet die Ursache ein** (Aufgabenerkennung, KI-Plan, Access-Ausführung, Ergebnisprüfung) und gibt
+  sie der KI mit; weiterhin höchstens 3 Zyklen, bestätigte Schritte bleiben.
+- **API-Kosten im Dashboard:** letzte Aufgabe, Sitzung, heute, gesamt; Modell, Ein-/Ausgabetokens; Nutzung je Anfrage
+  und Aufgabe gespeichert; Budget je Aufgabe (Standard 1 $) und Limit je Tag/Monat/gesamt einstellbar. Für Modelle ohne
+  hinterlegten Preis wird bei aktivem Limit nichts gesendet (vorher: Limit wirkungslos). Preis für `gpt-5` ergänzt.
+  Das Kostenlimit ist aus den Einstellungen ins Dashboard umgezogen.
+- **Automatische Updates** über GitHub Releases dieses Repositorys: Hinweis mit Version und Notizen, Download nach
+  Zustimmung, Prüfung gegen die veröffentlichte SHA-256, Selbsttest der neuen EXE, Austausch über eine vollständig
+  kopierte Zwischendatei, Neustart erst nach Freigabe der Einzelinstanz, Rückfall auf die bisherige Version, wenn die
+  neue nicht startet. Ohne Internet läuft alles normal weiter.
+- **Diagnoseberichte nur für schwerwiegende Fehler** (Absturz, nicht behebbarer Access-Fehler, Sicherung/
+  Wiederherstellung, KI-Verarbeitung, nach allen Korrekturen nicht lösbare Aufgabe) mit Kategorie, Komponente,
+  Korrekturversuchen und Log-Auszug – ohne Schlüssel, Benutzernamen, Pfade (auch Netzlaufwerke) und Werte in
+  Anführungszeichen. „Diagnose exportieren“ im Dashboard.
+
+### Behoben
+- KI-Anfragen nach einer Aufgabe (Chat, Systemtest) wurden noch der vorherigen Aufgabe zugerechnet.
+- Lange Datenbankpfade (tiefe Ordner, OneDrive, Netzlaufwerke): Access kürzt sie im Fenstertitel, die geöffnete
+  Datenbank wurde dann nicht erkannt – jetzt wird der Pfad bei genau dieser Access-Instanz erfragt.
+- Die Vergleichsprüfung „Ergebnis wie verlangt“ entfiel, wenn Access die Datei exklusiv geöffnet hatte – jetzt läuft
+  sie über die bestehende Verbindung (nur lesend).
+
+## [1.0.0b2] – 2026-11-16
 
 ### Neu
 - **Freigabesystem entfernt:** keine 24-Stunden-Freigaben, Lernprogramm-Zuordnungen oder gemerkten Datenbanken mehr –

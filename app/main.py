@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sys
+from types import TracebackType
 
 
 def main() -> int:
@@ -57,8 +58,13 @@ def main() -> int:
     if start_mode == "background" and window.tray is None:
         start_mode = "compact"  # ohne Infobereich gäbe es sonst keinen Weg zurück
     if instance is not None:
+        from app.core import updater
+
+        _install_crash_report()
         instance.command.connect(window.handle_command)
         _refresh_autostart()
+        # nach einem Update: die vorherige Version erst löschen, wenn die neue eine Minute stabil läuft
+        QTimer.singleShot(60_000, updater.cleanup_previous)
         # erst hier: nur die einzige laufende Instanz darf „läuft“-Einträge eines Absturzes abschließen
         interrupted = ctx.storage.mark_interrupted_tasks()
         if interrupted:
@@ -91,7 +97,32 @@ def main() -> int:
     ctx.shutdown()
     if instance is not None:
         instance.release()
+    if window.restart_after_quit:  # installiertes Update: erst jetzt (Einzelinstanz freigegeben) neu starten
+        from app.core import updater
+
+        updater.restart()
     return 0 if selftest else code
+
+
+def _install_crash_report() -> None:
+    """Unerwartete Ausnahmen (Absturz eines Ablaufs) → anonymisierter Diagnosebericht, danach Standardbehandlung."""
+    previous = sys.excepthook
+
+    def hook(exc_type: type[BaseException], exc: BaseException, tb: TracebackType | None) -> None:
+        try:
+            import traceback
+
+            from app.core import diagnostics
+
+            if diagnostics.classify(exc) is not None:
+                diagnostics.write_report("Programmabsturz/unerwartete Ausnahme", "Programm",
+                                         "".join(traceback.format_exception(exc_type, exc, tb))[-4000:],
+                                         outcome="nicht abgefangen")
+        except Exception:
+            pass  # der Bericht darf die Fehlerbehandlung nie verhindern
+        previous(exc_type, exc, tb)
+
+    sys.excepthook = hook
 
 
 def _refresh_autostart() -> None:

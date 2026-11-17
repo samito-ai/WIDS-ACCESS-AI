@@ -60,7 +60,8 @@ CREATE TABLE IF NOT EXISTS usage (
     purpose       TEXT NOT NULL DEFAULT '',
     input_tokens  INTEGER NOT NULL DEFAULT 0,
     output_tokens INTEGER NOT NULL DEFAULT 0,
-    cost_usd      REAL
+    cost_usd      REAL,
+    task_id       INTEGER
 );
 CREATE TABLE IF NOT EXISTS backups (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -110,6 +111,8 @@ class UsageSummary(BaseModel):
     output_tokens: int = 0
     cost_usd: float = 0.0
     unpriced_requests: int = 0
+    #: verwendete Modelle (kommagetrennt)
+    models: str = ""
 
 
 class Storage:
@@ -124,6 +127,9 @@ class Storage:
         with self._tx() as cur:
             cur.execute("PRAGMA foreign_keys = ON")
             cur.executescript(_SCHEMA)
+            # Verlauf älterer Versionen: Kosten je Aufgabe nachrüsten (bestehende Einträge bleiben ohne Aufgabe)
+            if "task_id" not in {row[1] for row in cur.execute("PRAGMA table_info(usage)")}:
+                cur.execute("ALTER TABLE usage ADD COLUMN task_id INTEGER")
 
     @property
     def path(self) -> Path:
@@ -281,22 +287,32 @@ class Storage:
         input_tokens: int,
         output_tokens: int,
         cost_usd: float | None,
+        task_id: int | None = None,
     ) -> None:
         with self._tx() as cur:
             cur.execute(
-                "INSERT INTO usage(ts, provider, model, purpose, input_tokens, output_tokens, cost_usd) "
-                "VALUES(?,?,?,?,?,?,?)",
-                (now_iso(), provider, model, purpose, input_tokens, output_tokens, cost_usd),
+                "INSERT INTO usage(ts, provider, model, purpose, input_tokens, output_tokens, cost_usd, task_id) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (now_iso(), provider, model, purpose, input_tokens, output_tokens, cost_usd, task_id),
             )
 
-    def usage_summary(self, period: str = "total") -> UsageSummary:
+    def usage_summary(self, period: str = "total", *, since: str | None = None,
+                      task_id: int | None = None) -> UsageSummary:
+        """Verbrauch je Zeitraum (``day``/``week``/``month``/``total``), seit einem Zeitpunkt oder für EINE Aufgabe."""
         sql = (
             "SELECT COUNT(*) AS n, COALESCE(SUM(input_tokens),0) AS i, COALESCE(SUM(output_tokens),0) AS o, "
-            "COALESCE(SUM(cost_usd),0) AS c, SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END) AS u FROM usage"
+            "COALESCE(SUM(cost_usd),0) AS c, SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END) AS u, "
+            "GROUP_CONCAT(DISTINCT model) AS models FROM usage"
         )
         params: list[Any] = []
         now = datetime.now(tz=UTC)
-        if period == "day":
+        if task_id is not None:
+            sql += " WHERE task_id = ?"
+            params.append(task_id)
+        elif since is not None:
+            sql += " WHERE ts >= ?"
+            params.append(since)
+        elif period == "day":
             sql += " WHERE ts >= ?"
             params.append(now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat(timespec="seconds"))
         elif period == "month":
@@ -315,7 +331,13 @@ class Storage:
             output_tokens=int(row["o"]),
             cost_usd=float(row["c"]),
             unpriced_requests=int(row["u"] or 0),
+            models=str(row["models"] or ""),
         )
+
+    def last_task_with_usage(self) -> int | None:
+        with self._tx() as cur:
+            row = cur.execute("SELECT MAX(task_id) AS t FROM usage WHERE task_id IS NOT NULL").fetchone()
+        return int(row["t"]) if row and row["t"] is not None else None
 
 
     # ------------------------------------------------------------------ Backups

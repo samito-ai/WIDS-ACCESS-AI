@@ -915,7 +915,12 @@ class ResultVerifier:
             v.add("Ergebnis wie verlangt", True, f"mehr als {_COMPARE_LIMIT} Datensätze – nicht verglichen", critical=False)
             return
         try:
-            _, wanted = e.queries.run_select_isolated(requested, limit=_COMPARE_LIMIT + 1)
+            try:
+                _, wanted = e.queries.run_select_isolated(requested, limit=_COMPARE_LIMIT + 1)
+            except WidsError:
+                # Datei exklusiv von Access geöffnet: dieselbe lesende Abfrage (nur SELECT) über die bestehende
+                # Verbindung – nicht riskanter als das Ausführen der gespeicherten Abfrage oben
+                _, wanted = e.queries.run_select_sql(requested, limit=_COMPARE_LIMIT + 1)
         except WidsError as exc:
             v.add("Verlangtes Ergebnis vergleichbar", False, f"verlangtes SQL nicht ausführbar: {exc.user_message}",
                   critical=False)

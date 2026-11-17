@@ -45,6 +45,10 @@ class TaskAnalyzer:
         self._cache: dict[str, tuple[float, AgentSolution]] = {}
         self._cache_lock = threading.Lock()
 
+    def bind_task(self, task_id: int | None) -> None:
+        """Folgende KI-Anfragen dieser Aufgabe zurechnen (Kosten je Aufgabe, Aufgabenbudget)."""
+        self._ai.task_id = task_id
+
     def clear_cache(self) -> None:
         """Nach einem nicht erfolgreichen Lauf: dieselbe Aufgabe soll neu (evtl. anders) geplant werden."""
         with self._cache_lock:

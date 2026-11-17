@@ -14,7 +14,10 @@ import threading
 import time
 from pathlib import Path
 
+from app.core.logging_setup import get_logger
 from app.vision.capture import TECOMP_PROCESS, visible_windows
+
+log = get_logger(__name__)
 
 # Kapitel immer 4-stellig, Übung 1- oder 2-stellig (Kapitel 0403 hat U1…U11)
 EXERCISE_FILE = re.compile(r"(?<![\w-])(\d{4})(\d{1,2})_\d+\.(?:accdb|mdb)\b", re.IGNORECASE)
@@ -216,9 +219,48 @@ def database_in_title(title: str) -> str:
 def _front_access() -> tuple[str, str] | None:
     """(Datenbankpfad, Fenstertitel) des vordersten Access-Fensters mit geöffneter Datenbank."""
     for window in visible_windows():
-        if window.process.lower() == "msaccess.exe" and (path := database_in_title(window.title)):
+        if window.process.lower() != "msaccess.exe":
+            continue
+        if path := database_in_title(window.title):
+            return path, window.title
+        # Access kürzt lange Pfade (tiefe Ordner, OneDrive, Netzlaufwerke) im Titel: dann genau diese Instanz fragen
+        if window.cls == "OMain" and (path := _path_of_access_window(window.hwnd)):
             return path, window.title
     return None
+
+
+def _path_of_access_window(hwnd: int, timeout: float = 5.0) -> str:
+    """Pfad der Datenbank in der Access-Instanz mit diesem Hauptfenster – über die Running Object Table, in einem
+    eigenen COM-Thread (der aufrufende Thread hat COM ggf. nicht initialisiert)."""
+
+    found: list[str] = []
+
+    def lookup() -> None:
+        from app.access.session import current_database_path, running_access_instances
+
+        for app in running_access_instances():
+            try:
+                if int(app.hWndAccessApp()) == hwnd:
+                    found.append(current_database_path(app) or "")
+                    return
+            except Exception:
+                continue
+
+    def work() -> None:
+        import pythoncom
+
+        pythoncom.CoInitialize()
+        try:
+            lookup()  # COM-Objekte sind nach Rückkehr freigegeben – erst dann CoUninitialize
+        except Exception as exc:
+            log.debug("Access-Pfad über COM nicht ermittelbar: %s", exc)
+        finally:
+            pythoncom.CoUninitialize()
+
+    thread = threading.Thread(target=work, name="wids-access-pfad", daemon=True)
+    thread.start()
+    thread.join(timeout)
+    return found[0] if found else ""
 
 
 def open_access_database() -> str:
