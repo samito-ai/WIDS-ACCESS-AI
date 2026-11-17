@@ -847,6 +847,18 @@ class PlanValidator:
             elif item.type == "table":
                 state.schema.tables.append(TableInfo(name=item.target, linked=action.direction == "link"))
 
+    def _check_answer_object_property(self, step: m.PlanStep, state: _State, report: ValidationReport) -> None:
+        action: m.AnswerObjectProperty = step.action  # type: ignore[assignment]
+        if not state.known:
+            return
+        found = {"table": state.table, "query": state.query,
+                 "form": lambda n: self._form_known(state, n) or None,
+                 "report": lambda n: self._report_known(state, n) or None}[action.object_type](action.name)
+        if not found:
+            self._err(report, step, f"Das Objekt „{action.name}“ ({action.object_type}) gibt es nicht.")
+        if action.property == "field_type" and not action.field:
+            self._err(report, step, "Für field_type muss field angegeben sein.")
+
     def _check_answer_query(self, step: m.PlanStep, state: _State, report: ValidationReport) -> None:
         action: m.AnswerQuery = step.action  # type: ignore[assignment]
         try:

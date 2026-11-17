@@ -654,6 +654,24 @@ class AnswerQuery(_Action):
         return "Frage"
 
 
+class AnswerObjectProperty(_Action):
+    """Frage zu einem Access-OBJEKT („Welche Datenquelle hat der Bericht …?“, „Tabelle oder Abfrage?“, „Welcher
+    Primärschlüssel?“) direkt aus den gespeicherten Eigenschaften beantworten – ändert nichts, nie geraten."""
+
+    action: Literal["answer_object_property"] = "answer_object_property"
+    RISK: ClassVar[Risk] = "safe"
+    question: str = Field(min_length=1, max_length=500)
+    object_type: Literal["table", "query", "form", "report"]
+    name: str
+    property: Literal["record_source", "record_source_type", "fields", "sql", "query_type", "primary_key",
+                      "field_type", "record_count", "group_by", "sort"]
+    #: nur bei field_type
+    field: str | None = None
+
+    def target(self) -> str:
+        return "Frage"
+
+
 class CalculateValue(_Action):
     """Rechenfrage OHNE Datenbankbezug („15 % von 240 €“): WIDS rechnet den Ausdruck selbst exakt aus – das Ergebnis
     stammt nie aus einer Schätzung des Sprachmodells. Jede Zahl im Ausdruck muss in ``given`` stehen."""
@@ -794,6 +812,7 @@ Action = Annotated[
     | ModifyReport
     | ModifyForm
     | AnswerQuery
+    | AnswerObjectProperty
     | CalculateValue
     | TransferObjects
     | AttachFiles
@@ -833,6 +852,7 @@ ACTION_LABELS: dict[str, str] = {
     "attach_files": "Dateien in Anlagefeld speichern",
     "set_field_from_file": "Textdatei in Feld übernehmen",
     "map_keys": "Fremdschlüssel zuordnen",
+    "answer_object_property": "Objekteigenschaft beantworten",
     "create_navigation_form": "Navigationsformular erstellen",
     "update_records": "Datensätze ändern",
     "delete_records": "Datensätze löschen",

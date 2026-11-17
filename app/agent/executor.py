@@ -338,6 +338,10 @@ class AccessExecutor:
         return StepResult(step_id=0, message=f"{len(a.objects)} Objekt(e) {verb} „{path.name}“: {names}",
                           details={"path": str(path)})
 
+    def _do_answer_object_property(self, e: AccessEngine, a: m.AnswerObjectProperty, o: ExecOptions) -> StepResult:
+        answer = object_property_answer(e, a)
+        return StepResult(step_id=0, message=f"{a.question} → {answer}", details={"answer": answer})
+
     def _do_answer_query(self, e: AccessEngine, a: m.AnswerQuery, o: ExecOptions) -> StepResult:
         columns, rows, isolated = e.queries.run_select_readonly(a.sql, limit=200)
         answer = m.answer_summary(columns, rows)
@@ -398,3 +402,65 @@ class AccessExecutor:
     def _do_delete_object(self, e: AccessEngine, a: m.DeleteObject, o: ExecOptions) -> StepResult:
         e.objects.delete(a.object_type, a.name)
         return StepResult(step_id=0, message=f"„{a.name}“ gelöscht")
+
+
+def object_property_answer(e: AccessEngine, a: m.AnswerObjectProperty) -> str:
+    """Antwort auf eine Objektfrage aus dem GESPEICHERTEN Zustand (Datenquelle samt Art, Felder, SQL, Schlüssel …)."""
+    from app.access.sqlbuilder import classify_sql
+
+    schema = e.schema()
+
+    def source_kind(source: str) -> str:
+        if not source:
+            return "keine Datenquelle"
+        if schema.table(source) is not None:
+            return f"Tabelle „{schema.table(source).name}“"  # type: ignore[union-attr]
+        if schema.query(source) is not None:
+            return f"Abfrage „{schema.query(source).name}“"  # type: ignore[union-attr]
+        if source.strip().upper().startswith("SELECT"):
+            return "SQL-Anweisung (keine gespeicherte Tabelle/Abfrage)"
+        return f"„{source}“ (weder Tabelle noch Abfrage in dieser Datenbank)"
+
+    if a.object_type in ("form", "report"):
+        info = e.objects.inspect_form(a.name) if a.object_type == "form" else e.objects.inspect_report(a.name)
+        if a.property == "record_source":
+            return info.record_source or "keine Datenquelle"
+        if a.property == "record_source_type":
+            return source_kind(info.record_source)
+        if a.property == "fields":
+            return ", ".join(sorted({x.control_source for x in info.controls
+                                     if x.control_source and not x.control_source.startswith("=")})) or "keine"
+        if a.property == "group_by" and a.object_type == "report":
+            return ", ".join(g.expression for g in info.group_levels) or "keine Gruppierung"  # type: ignore[union-attr]
+        if a.property == "sort":
+            return str(info.properties.get("OrderBy") or "") or "keine gespeicherte Sortierung"
+    elif a.object_type == "query":
+        query = schema.query(a.name)
+        if query is None:
+            raise ObjectNotFoundError("Abfrage", a.name)
+        if a.property == "sql":
+            return query.sql.strip()
+        if a.property == "query_type":
+            return query.type_name or classify_sql(query.sql)
+        if a.property == "fields":
+            return ", ".join(query.fields) or "keine"
+        if a.property == "record_count":
+            return str(e.queries.run_select_readonly(f"SELECT Count(*) FROM {quote_ident(query.name)}", limit=1)[1][0][0])
+    else:
+        table = schema.table(a.name)
+        if table is None:
+            raise ObjectNotFoundError("Tabelle", a.name)
+        if a.property == "primary_key":
+            return ", ".join(table.primary_key) or "kein Primärschlüssel"
+        if a.property == "fields":
+            return ", ".join(f.name for f in table.fields)
+        if a.property == "field_type":
+            found = table.field(a.field or "")
+            if found is None:
+                raise ObjectNotFoundError("Feld", f"{a.name}.{a.field}")
+            from app.access.constants import TYPE_LABELS_DE
+
+            return TYPE_LABELS_DE.get(found.type, found.type.value)  # wie Access ihn anzeigt
+        if a.property == "record_count":
+            return str(e.tables.count_records(table.name))
+    raise WidsError(f"Die Eigenschaft „{a.property}“ gibt es für {a.object_type} nicht.")

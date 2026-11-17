@@ -369,7 +369,7 @@ class TaskPipeline:
         for v in verifications:
             step = steps.get(v.step_id)
             action = step.action if step else None
-            if v.passed and isinstance(action, m.AnswerQuery | m.CalculateValue):
+            if v.passed and isinstance(action, m.AnswerQuery | m.CalculateValue | m.AnswerObjectProperty):
                 answer = next((c.detail for c in v.checks if c.name == "Antwort erneut ermittelt"), "")
                 lines.append(f"Schritt {v.step_id}: Frage „{action.question}“ per Abfrage beantwortet – Ergebnis: {answer}")
                 continue

@@ -768,6 +768,13 @@ class ResultVerifier:
                 v.add(f"„{item.target}“ {'verknüpft' if a.direction == 'link' else 'importiert'}",
                       bool(getattr(found, "linked", False)) == (a.direction == "link"))
 
+    def _verify_answer_object_property(self, e: AccessEngine, a: m.AnswerObjectProperty, r: StepResult,
+                                       v: Verification) -> None:
+        from app.agent.executor import object_property_answer
+
+        answer = object_property_answer(e, a)  # erneut aus dem gespeicherten Zustand gelesen
+        v.add("Antwort erneut ermittelt", answer == r.details.get("answer"), answer[:200])
+
     def _verify_answer_query(self, e: AccessEngine, a: m.AnswerQuery, r: StepResult, v: Verification) -> None:
         columns, rows, isolated = e.queries.run_select_readonly(a.sql, limit=200)
         answer = m.answer_summary(columns, rows)

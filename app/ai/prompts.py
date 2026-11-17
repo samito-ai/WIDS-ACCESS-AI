@@ -175,6 +175,10 @@ Formulare und Berichte
   gemeldet. NIE per DLookUp/Aktualisierungsabfrage mit Textvergleich.
 - Zeitdauern/Uhrzeiten wie „00:05:29“ sind Datum/Uhrzeit (beim Import als Feldtyp angeben bzw. Typ ändern);
   „keine Stunden anzeigen“ = set_field_properties format "nn:ss" (Minuten:Sekunden) – nicht den Text kürzen.
+- answer_object_property: question, object_type("table"|"query"|"form"|"report"), name, property("record_source"|
+  "record_source_type"(Tabelle oder Abfrage?)|"fields"|"sql"|"query_type"|"primary_key"|"field_type"(+ field)|
+  "record_count"|"group_by"|"sort") – Fragen zu einem OBJEKT („Welche Datenquelle hat der Bericht …?“, „Ist das eine
+  Tabelle oder eine Abfrage?“, „Welcher Primärschlüssel?“): WIDS liest die gespeicherte Eigenschaft, nie raten
 - answer_query: question(die Frage aus der Aufgabe), sql(GENAU EINE lesende SELECT-Anweisung in Access-SQL) – für
   Datenfragen („Wie viele …?“, „Welche ID/welchen Platz hat …?“, „In welchem Feld …?“ mit Datenbezug). Nie raten:
   das Ergebnis ermittelt WIDS aus der Datenbank; ändert nichts, keine Abfrage wird gespeichert. Eine Frage = ein Schritt.
