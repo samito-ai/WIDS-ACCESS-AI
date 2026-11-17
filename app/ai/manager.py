@@ -51,6 +51,9 @@ PROVIDER_FACTORIES: dict[str, ProviderFactory] = {
 PROVIDER_LABELS: dict[str, str] = {"anthropic": "Anthropic Claude", "openai": "OpenAI"}
 
 
+#: weniger Antwortraum lohnt keine Anfrage (eine Analyse braucht meist einige tausend Tokens)
+MIN_OUTPUT_TOKENS = 1500
+
 class ConnectionCheck(BaseModel):
     provider: str
     #: Modell, das auf die Testanfrage tatsächlich geantwortet hat
@@ -187,6 +190,41 @@ class ProviderManager:
                 "Die Anfrage wurde nicht gesendet. Das Limit lässt sich im Dashboard unter „API-Kosten“ ändern."
             )
 
+    def _remaining_budget(self) -> float | None:
+        """Kleinster noch freier Betrag aus Aufgabenbudget und Tages-/Monats-/Gesamtlimit (None = unbegrenzt)."""
+        if self._storage is None:
+            return None
+        rest: list[float] = []
+        if self.settings.ai.task_cost_limit_usd > 0 and self.task_id is not None:
+            spent = self._storage.usage_summary(task_id=self.task_id).cost_usd
+            rest.append(self.settings.ai.task_cost_limit_usd - spent)
+        if self.settings.ai.cost_limit_usd > 0:
+            spent = self._storage.usage_summary(self.settings.ai.cost_limit_period).cost_usd
+            rest.append(self.settings.ai.cost_limit_usd - spent)
+        return min(rest) if rest else None
+
+    def _fit_budget(self, request: AIRequest) -> int:
+        """Antwortlänge so begrenzen, dass die Anfrage höchstens das Restbudget kostet (Live-Fund: Bremse 0,85 $ um
+        3 Cent überschritten, weil nur VOR der Anfrage „bisher < Budget“ geprüft wurde). Die Eingabe wird vorsichtig
+        hoch geschätzt (3 Zeichen je Token, 1 600 Tokens je Bild) – sie ist die einzige verbleibende Unsicherheit."""
+        remaining = self._remaining_budget()
+        input_cost = self.estimate_cost(request.model, self._input_estimate(request), 0)
+        output_cost = self.estimate_cost(request.model, 0, 1_000_000)
+        if remaining is None or input_cost is None or not output_cost:
+            return request.max_tokens
+        allowed = int((remaining - input_cost) / output_cost * 1_000_000)
+        if allowed < MIN_OUTPUT_TOKENS:
+            raise CostLimitError(
+                f"Das Restbudget ({max(remaining, 0):.2f} $) reicht für keine sinnvolle weitere Anfrage mehr "
+                f"(geschätzt {input_cost:.2f} $ nur für die Eingabe). Die Anfrage wurde nicht gesendet; das Budget lässt "
+                "sich im Dashboard unter „API-Kosten“ erhöhen.")
+        return min(request.max_tokens, allowed)
+
+    @staticmethod
+    def _input_estimate(request: AIRequest) -> int:
+        chars = len(request.system) + sum(len(m.content) for m in request.messages)
+        return chars // 3 + 1600 * sum(len(m.images) for m in request.messages)
+
     def _record(self, response: AIResponse, purpose: str) -> None:
         cost = self.estimate_cost(response.model, response.input_tokens, response.output_tokens,
                                   cache_read=response.cache_read_tokens, cache_write=response.cache_write_tokens)
@@ -224,6 +262,7 @@ class ProviderManager:
             timeout_s=self.settings.ai.request_timeout_s,
         )
         self._check_limit(request.model)
+        request.max_tokens = self._fit_budget(request)
         attempts = max(1, self.settings.ai.max_retries + 1)
         last_error: ProviderError | None = None
         for attempt in range(1, attempts + 1):
