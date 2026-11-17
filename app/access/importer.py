@@ -78,7 +78,9 @@ def tecomp_dirs(db_path: str) -> list[Path]:
     workshop = tecomp.workshop_for(db_path) if in_workdir and not match else None
     if workshop is not None:  # Quelldateien eines Workshops (z. B. CDs.xls) liegen im Workshop-Ordner
         dirs.append(workshop)
-    work = tecomp.workdirs()  # bereits auf Erreichbarkeit geprüft (Netzlaufwerk mit Zeitlimit)
+    # te.comp-Arbeitsordner/Laufwerk W: ebenfalls nur für te.comp-Dateien – eine eigene Datenbank bekäme sonst eine
+    # fremde, ähnlich benannte Datei aus te.comp statt der eigenen daneben (bereits auf Erreichbarkeit geprüft)
+    work = tecomp.workdirs() if in_workdir else []
     return [d for d in dirs if d.is_dir()] + work
 
 
@@ -116,7 +118,27 @@ def resolve_source(name: str, db_path: str) -> Path:
             if (path.is_file() and path.suffix.lower() in ALLOWED_SUFFIXES
                     and wanted in (path.name.lower(), path.stem.lower()) and _inside(path, folder)):
                 return path
+    # Schreibabweichung („LetterPerfect.txt“ ↔ „LetterPerfekt.txt“): nur bei GLEICHER Endung, sehr ähnlichem Namen und
+    # genau einem klar besten Kandidaten – sonst lieber nicht gefunden als eine falsche Datei
+    import difflib
+
+    suffix, stem = candidate.suffix.lower(), candidate.stem.lower()
+    scored = sorted(((difflib.SequenceMatcher(None, stem, path.stem.lower()).ratio(), path)
+                     for folder in search_dirs(db_path) for path in _entries(folder)
+                     if path.is_file() and path.suffix.lower() in ALLOWED_SUFFIXES and _inside(path, folder)
+                     and (not suffix or path.suffix.lower() == suffix)), key=lambda item: item[0], reverse=True)
+    names = {p.name.lower() for _, p in scored}
+    if scored and scored[0][0] >= 0.85 and (len(names) == 1 or scored[0][0] - max(
+            r for r, p in scored if p.name.lower() != scored[0][1].name.lower()) >= 0.1):
+        return scored[0][1]
     raise ObjectNotFoundError("Datei", name)
+
+
+def read_text_file(path: Path) -> str:
+    """Text einer Datei für ein Access-Feld: Kodierung erkannt (UTF-8/Windows-1252), Zeilenenden als CRLF, ohne
+    Leerzeilen am Ende."""
+    text = _decode(path.read_bytes()).replace("\r\n", "\n").replace("\r", "\n").rstrip()
+    return text.replace("\n", "\r\n")
 
 
 def _inside(path: Path, folder: Path) -> bool:

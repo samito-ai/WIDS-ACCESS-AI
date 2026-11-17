@@ -584,6 +584,44 @@ class AttachFiles(_Action):
         return f"{self.table}.{self.field}"
 
 
+class SetFieldFromFile(_Action):
+    """Inhalt einer Textdatei der Übung in ein Feld schreiben (z. B. Liedtext aus „LetterPerfect.txt“)."""
+
+    action: Literal["set_field_from_file"] = "set_field_from_file"
+    RISK: ClassVar[Risk] = "modify"
+    table: str
+    field: str
+    #: Dateiname wie in der Aufgabe – kleine Schreibabweichungen werden toleriert, wenn genau eine Datei passt
+    file: str
+    #: Datensatz, der den Text bekommt (ohne Bedingung: alle – dann als löschend eingestuft)
+    where: str | None = None
+
+    @property
+    def risk(self) -> Risk:
+        return "modify" if self.where and self.where.strip() else "destructive"
+
+    def target(self) -> str:
+        return f"{self.table}.{self.field}"
+
+
+class MapKeys(_Action):
+    """Fremdschlüssel eindeutig befüllen („CD-Nummer mit der jeweils richtigen Nummer“): Der Text in ``source_fields``
+    wird mit ``lookup_fields`` der anderen Tabelle verglichen (Groß-/Kleinschreibung, Satzzeichen, zusammengesetzte
+    Werte, kleine Tippfehler nur bei eindeutigem Kandidaten). Nur LEERE Zielfelder werden befüllt, Mehrdeutiges bleibt leer."""
+
+    action: Literal["map_keys"] = "map_keys"
+    RISK: ClassVar[Risk] = "modify"
+    table: str
+    target_field: str
+    source_fields: list[str] = Field(min_length=1)
+    lookup_table: str
+    lookup_key: str
+    lookup_fields: list[str] = Field(min_length=1)
+
+    def target(self) -> str:
+        return f"{self.table}.{self.target_field}"
+
+
 class TransferObjects(_Action):
     """Objekte mit einer anderen Access-Datenbank der Übung austauschen: exportieren (auch in eine NEUE Datenbank,
     z. B. Sicherungsdatenbank), importieren oder Tabellen verknüpfen."""
@@ -759,6 +797,8 @@ Action = Annotated[
     | CalculateValue
     | TransferObjects
     | AttachFiles
+    | SetFieldFromFile
+    | MapKeys
     | CreateNavigationForm
     | RenameObject
     | DeleteObject,
@@ -791,6 +831,8 @@ ACTION_LABELS: dict[str, str] = {
     "calculate_value": "Rechenfrage berechnen",
     "transfer_objects": "Objekte mit anderer Datenbank austauschen",
     "attach_files": "Dateien in Anlagefeld speichern",
+    "set_field_from_file": "Textdatei in Feld übernehmen",
+    "map_keys": "Fremdschlüssel zuordnen",
     "create_navigation_form": "Navigationsformular erstellen",
     "update_records": "Datensätze ändern",
     "delete_records": "Datensätze löschen",

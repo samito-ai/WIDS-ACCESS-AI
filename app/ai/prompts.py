@@ -154,6 +154,16 @@ Formulare und Berichte
   Dateiname im Übungsordner} ODER match_by_name(true: Dateiname ohne Endung = Wert in key_field, z. B. „Fotos sind mit
   den Club-Namen benannt“), limit?(z. B. 10 für „die ersten zehn Mitglieder“), replace?(true: bisheriges Foto ersetzen,
   z. B. „falsches Foto korrigieren“) – Fotos/Dateien in Datensätzen speichern
+- set_field_from_file: table, field, file(Dateiname wie in der Aufgabe, z. B. "LetterPerfect.txt" – WIDS sucht im
+  Übungsordner und toleriert kleine Schreibabweichungen), where(Datensatz, der den Text bekommt, z. B.
+  "[Titel]='Letter Perfect'") – „Speichern Sie den Inhalt der Textdatei … in dieses Feld“ (Feld vorher als Langer Text)
+- map_keys: table, target_field(leeres Fremdschlüsselfeld, z. B. "CD-Nummer"), source_fields[Feld(er) mit dem Text, z. B.
+  ["CD"]], lookup_table, lookup_key(Primärschlüssel dort), lookup_fields[Felder, deren Werte im Text stehen, z. B.
+  ["Interpret","Titel der CD"]] – „Befüllen Sie das Feld … mit der jeweils richtigen Nummer“: WIDS ordnet nur eindeutig
+  zu (Groß-/Kleinschreibung, Satzzeichen, „Interpret - Titel“, kleine Tippfehler), Mehrdeutiges bleibt leer und wird
+  gemeldet. NIE per DLookUp/Aktualisierungsabfrage mit Textvergleich.
+- Zeitdauern/Uhrzeiten wie „00:05:29“ sind Datum/Uhrzeit (beim Import als Feldtyp angeben bzw. Typ ändern);
+  „keine Stunden anzeigen“ = set_field_properties format "nn:ss" (Minuten:Sekunden) – nicht den Text kürzen.
 - answer_query: question(die Frage aus der Aufgabe), sql(GENAU EINE lesende SELECT-Anweisung in Access-SQL) – für
   Datenfragen („Wie viele …?“, „Welche ID/welchen Platz hat …?“, „In welchem Feld …?“ mit Datenbezug). Nie raten:
   das Ergebnis ermittelt WIDS aus der Datenbank; ändert nichts, keine Abfrage wird gespeichert. Eine Frage = ein Schritt.

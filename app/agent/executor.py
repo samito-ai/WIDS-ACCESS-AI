@@ -259,6 +259,46 @@ class AccessExecutor:
         e.objects.modify_report(a.name, a.changes)
         return StepResult(step_id=0, message=f"Bericht „{a.name}“ geändert")
 
+    def _do_set_field_from_file(self, e: AccessEngine, a: m.SetFieldFromFile, o: ExecOptions) -> StepResult:
+        from app.access import importer
+
+        source = importer.resolve_source(a.file, e.path)
+        text = importer.read_text_file(source)
+        affected = e.tables.update_records(a.table, {a.field: text}, a.where, max_affected=o.max_affected)
+        return StepResult(step_id=0, message=f"Inhalt von „{source.name}“ ({len(text)} Zeichen) in {affected} "
+                                             f"Datensatz/-sätze von „{a.table}.{a.field}“ übernommen",
+                          details={"affected": affected, "file": str(source), "chars": len(text)})
+
+    def _do_map_keys(self, e: AccessEngine, a: m.MapKeys, o: ExecOptions) -> StepResult:
+        from app.access.matching import match_where, plan_key_mapping
+        from app.core.errors import ApprovalRequiredError
+
+        columns = ", ".join(quote_ident(f) for f in a.source_fields)
+        _, sources = e.tables.read_sql(f"SELECT DISTINCT {columns} FROM {quote_ident(a.table)}", limit=20000)
+        lookup = ", ".join(quote_ident(f) for f in [a.lookup_key, *a.lookup_fields])
+        _, rows = e.tables.read_sql(f"SELECT {lookup} FROM {quote_ident(a.lookup_table)}", limit=100000)
+        mapping = plan_key_mapping([tuple(r) for r in sources if any(v is not None for v in r)],
+                                   [(r[0], tuple(r[1:])) for r in rows])
+        empty = f"{quote_ident(a.target_field)} Is Null"  # nur leere Felder befüllen – nie Vorhandenes überschreiben
+        planned = {s: f"({match_where(a.source_fields, s)}) AND {empty}" for s in mapping.keys}
+        total = sum(e.tables.count_records(a.table, where) for where in planned.values())
+        if o.max_affected is not None and total > o.max_affected:
+            error = ApprovalRequiredError(
+                f"Zuordnung in „{a.table}“: {total} Datensätze wären betroffen (Grenze {o.max_affected}). "
+                "Das ist mehr als die Grenze für automatische Änderungen (Einstellungen) – nichts geändert.")
+            error.affected = total  # type: ignore[attr-defined]
+            raise error
+        affected = sum(e.tables.update_records(a.table, {a.target_field: mapping.keys[s]}, where)
+                       for s, where in planned.items())
+        unresolved = [[list(s), why] for s, why in mapping.unresolved.items()]
+        message = (f"{len(mapping.keys)} von {len(mapping.keys) + len(unresolved)} Werten eindeutig zugeordnet, "
+                   f"{affected} Datensätze in „{a.table}.{a.target_field}“ befüllt")
+        if unresolved:
+            message += "; nicht eindeutig: " + "; ".join(f"{' '.join(map(str, s))} ({why})" for s, why in unresolved)
+        return StepResult(step_id=0, message=message, details={
+            "affected": affected, "mapping": [[list(s), k] for s, k in mapping.keys.items()],
+            "similar": [[list(s), k, ratio] for s, (k, ratio) in mapping.similar.items()], "unresolved": unresolved})
+
     def _do_attach_files(self, e: AccessEngine, a: m.AttachFiles, o: ExecOptions) -> StepResult:
         files = self.attach_plan(e, a)
         count = e.tables.attach_files(a.table, a.field, a.key_field, files, replace=a.replace)

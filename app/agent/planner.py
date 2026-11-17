@@ -797,6 +797,23 @@ class PlanValidator:
             if fragment:
                 ensure_safe_fragment(fragment, "Filter/Sortierung des Berichts")
 
+    def _check_set_field_from_file(self, step: m.PlanStep, state: _State, report: ValidationReport) -> None:
+        action: m.SetFieldFromFile = step.action  # type: ignore[assignment]
+        table = self._need_table(report, step, state, action.table)
+        if table is not None:
+            self._need_field(report, step, state, table, action.field)
+
+    def _check_map_keys(self, step: m.PlanStep, state: _State, report: ValidationReport) -> None:
+        action: m.MapKeys = step.action  # type: ignore[assignment]
+        table = self._need_table(report, step, state, action.table)
+        if table is not None:
+            for name in [action.target_field, *action.source_fields]:
+                self._need_field(report, step, state, table, name)
+        lookup = self._need_table(report, step, state, action.lookup_table)
+        if lookup is not None:
+            for name in [action.lookup_key, *action.lookup_fields]:
+                self._need_field(report, step, state, lookup, name)
+
     def _check_attach_files(self, step: m.PlanStep, state: _State, report: ValidationReport) -> None:
         action: m.AttachFiles = step.action  # type: ignore[assignment]
         table = self._need_table(report, step, state, action.table)

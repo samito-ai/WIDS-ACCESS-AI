@@ -689,6 +689,51 @@ class ResultVerifier:
                                                                for x in v.checks):
             _check_width_fit(e.objects.page_setup(a.name), v)  # Neuordnung/neue Felder dürfen nicht über die Seite
 
+    def _verify_set_field_from_file(self, e: AccessEngine, a: m.SetFieldFromFile, r: StepResult,
+                                    v: Verification) -> None:
+        """Der Feldinhalt jedes betroffenen Datensatzes ist genau der Dateiinhalt (Zeilenenden egal)."""
+        from pathlib import Path
+
+        from app.access import importer
+
+        expected = importer.read_text_file(Path(r.details["file"]) if r.details.get("file")
+                                           else importer.resolve_source(a.file, e.path))
+        sql = f"SELECT {quote_ident(a.field)} FROM {quote_ident(a.table)}" + (f" WHERE {a.where}" if a.where else "")
+        _, rows = e.tables.read_sql(sql, limit=5000)
+
+        def plain(text: Any) -> str:
+            return "\n".join(line.rstrip() for line in str(text or "").replace("\r\n", "\n").split("\n")).strip()
+
+        same = sum(1 for row in rows if plain(row[0]) == plain(expected))
+        v.add("Datensatz für den Text vorhanden", bool(rows), f"{len(rows)} Datensatz/-sätze")
+        v.add(f"{a.field} enthält den Dateiinhalt", bool(rows) and same == len(rows),
+              f"{same} von {len(rows)} Datensätzen, {len(expected)} Zeichen aus „{Path(r.details.get('file', a.file)).name}“")
+
+    def _verify_map_keys(self, e: AccessEngine, a: m.MapKeys, r: StepResult, v: Verification) -> None:
+        """Jeder zugeordnete Quellwert hat in ALLEN seinen Datensätzen genau den ermittelten Schlüssel, der Schlüssel
+        existiert in der Nachschlagetabelle, und kein Wert blieb ohne eindeutige Zuordnung."""
+        from app.access.matching import match_where
+
+        mapping = list(r.details.get("mapping", []))
+        wrong, missing_keys = [], []
+        for source, key in mapping:
+            where = match_where(a.source_fields, tuple(source))
+            total = e.tables.count_records(a.table, where)
+            stored = e.tables.count_records(a.table, f"({where}) AND {quote_ident(a.target_field)} = {sql_literal(key)}")
+            if stored != total:
+                wrong.append(f"{' '.join(map(str, source))}: {stored} von {total}")
+            if e.tables.count_records(a.lookup_table, f"{quote_ident(a.lookup_key)} = {sql_literal(key)}") != 1:
+                missing_keys.append(str(key))
+        v.add("Zugeordnete Schlüssel gespeichert", bool(mapping) and not wrong,
+              "; ".join(wrong) or f"{len(mapping)} Werte zugeordnet")
+        v.add("Schlüssel existieren in der Nachschlagetabelle", not missing_keys, ", ".join(missing_keys))
+        unresolved = list(r.details.get("unresolved", []))
+        v.add("Alle Werte eindeutig zugeordnet", not unresolved,
+              "; ".join(f"{' '.join(map(str, s))}: {why}" for s, why in unresolved))
+        if r.details.get("similar"):
+            v.add("Zuordnung über Ähnlichkeit (eindeutig)", True, "; ".join(
+                f"{' '.join(map(str, s))} → {k} ({ratio})" for s, k, ratio in r.details["similar"]), critical=False)
+
     def _verify_attach_files(self, e: AccessEngine, a: m.AttachFiles, r: StepResult, v: Verification) -> None:
         stored = {k.lower(): names for k, names in e.tables.attachment_names(a.table, a.field, a.key_field).items()}
         for key, file_name in dict(r.details.get("files", {})).items():

@@ -131,7 +131,8 @@ _BLOCKED = ("Blockiert – nicht eindeutig genug für die automatische Ausführu
             "Aufgabe genauer fassen): ")
 
 
-_DATA_WRITES = (m.InsertRecords, m.UpdateRecords, m.DeleteRecords, m.ImportData, m.RunActionQuery, m.CopyTable)
+_DATA_WRITES = (m.InsertRecords, m.UpdateRecords, m.DeleteRecords, m.ImportData, m.RunActionQuery, m.CopyTable,
+                m.SetFieldFromFile, m.MapKeys)
 
 
 def _mentions(text: str, name: str) -> bool:
@@ -203,7 +204,7 @@ _WRITE_TARGETS = (re.compile(rf"^\s*UPDATE\s+{_NAME}\s+SET\s", re.IGNORECASE),
 
 def _write_target(action: Any, queries: dict[str, str]) -> str:
     """Tabelle, in die ein Datenschritt schreibt (klein geschrieben) – „“, wenn sie sich nicht eindeutig ergibt."""
-    if isinstance(action, m.UpdateRecords | m.DeleteRecords | m.InsertRecords):
+    if isinstance(action, m.UpdateRecords | m.DeleteRecords | m.InsertRecords | m.SetFieldFromFile | m.MapKeys):
         return str(action.table).lower()
     if isinstance(action, m.RunActionQuery):
         sql = action.sql or queries.get((action.name or "").lower(), "")
@@ -220,6 +221,8 @@ def _cascades_from(table: str, schema: Any) -> bool:
     return any((r.cascade_delete or r.cascade_update) and r.table.lower() == table.lower() for r in schema.relations)
 
 
+#: Schritte an EINER Tabelle, deren Freigabe bei einer in diesem Lauf angelegten Tabelle erst zur Ausführung geprüft wird
+_FRESH_CHECKED = (m.ChangeFieldType, m.DeleteRecords, m.UpdateRecords, m.SetFieldFromFile)
 #: Datenbankobjekte, die ein Schritt anlegt und die sich nachprüfen lassen, wenn es sie schon gibt
 _REPLACEABLE = (m.CreateTable, m.CreateQuery, m.CreateForm, m.CreateReport, m.CopyTable, m.CreateIndex,
                 m.CreateRelationship)
@@ -377,7 +380,7 @@ class TaskPipeline:
                 continue
             # Anlagen (je Datensatz die Datei nachgeprüft) und Aktionsabfragen (Feld danach nicht leer) belegen ebenfalls
             if not v.passed or not isinstance(action, m.InsertRecords | m.UpdateRecords | m.ImportData | m.AttachFiles
-                                              | m.RunActionQuery):
+                                              | m.RunActionQuery | m.SetFieldFromFile | m.MapKeys):
                 continue
             checks = ", ".join(c.name + (f" ({c.detail})" if c.detail else "") for c in v.checks if c.passed)
             values = ""
@@ -877,7 +880,10 @@ class TaskPipeline:
         fresh = self._fresh_write(step)
         if fresh:  # Daten einer Tabelle, die erst diese Aufgabe angelegt hat – vollständig in der Sicherung davor
             options.max_affected = None
-        if (self._risk(step) == "destructive" and (step.id in self._auto_steps or fresh)
+        # Tabellen dieses Laufs gibt es bei der Planung noch nicht – für sie wird die Freigabe jetzt geprüft
+        on_fresh = (self._backup_verified and isinstance(step.action, _FRESH_CHECKED)
+                    and str(step.action.table).lower() in self._fresh_tables)
+        if (self._risk(step) == "destructive" and (step.id in self._auto_steps or fresh or on_fresh)
                 and self._auto_allowed(step, self._access.path)):
             event("log", "Löschender Schritt automatisch ausgeführt (Übungsdatenbank, Sicherung geprüft): "
                          + self._impact(step)[0], step.id)
@@ -1158,7 +1164,7 @@ class TaskPipeline:
             schema = self._access.schema()
             linked = [t.name.lower() for t in schema.tables if t.linked]
             queries = {q.name.lower(): (q.sql or "").lower() for q in schema.queries}
-            if isinstance(action, m.DeleteRecords | m.UpdateRecords):
+            if isinstance(action, m.DeleteRecords | m.UpdateRecords | m.SetFieldFromFile):
                 table = schema.table(action.table)
                 if (table is not None and not table.linked and action.table.lower() in self._fresh_tables
                         and not _cascades_from(action.table, schema)):
@@ -1180,7 +1186,11 @@ class TaskPipeline:
                 table = schema.table(action.name)
                 return table is not None and not table.linked
             if isinstance(action, m.ChangeFieldType):
-                return False  # verkleinernd/verlustbehaftet (verlustfreie Typänderungen sind gar nicht „löschend“)
+                # verlustbehaftet nie bei vorhandenen Daten – nur bei einer Tabelle, die dieser Lauf gerade angelegt hat
+                # (z. B. Spieldauer „00:05:29“ von Text nach Datum/Uhrzeit), deren Daten vollständig in der Sicherung liegen
+                table = schema.table(action.table)
+                return (table is not None and not table.linked and action.table.lower() in self._fresh_tables
+                        and not _cascades_from(action.table, schema))
             if isinstance(action, m.RemoveField):
                 table = schema.table(action.table)
                 return table is not None and not table.linked and table.field(action.field) is not None
