@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import math
 import re
+import struct
 import threading
 import time
 from collections.abc import Callable
@@ -228,8 +230,8 @@ def _converts_without_loss(e: Any, action: m.ChangeFieldType) -> bool:
     if action.new_type not in supported:
         return False
     f = quote_ident(action.field)
-    _, rows = e.tables.read_sql(f"SELECT DISTINCT {f} FROM {quote_ident(action.table)} WHERE {f} Is Not Null",
-                                limit=20001)
+    # ohne DISTINCT: das würde Langen Text auf 255 Zeichen kürzen und eine zu kurze Länge vortäuschen
+    _, rows = e.tables.read_sql(f"SELECT {f} FROM {quote_ident(action.table)} WHERE {f} Is Not Null", limit=20001)
     if len(rows) > 20000:
         return False
     for (value,) in rows:
@@ -240,13 +242,16 @@ def _converts_without_loss(e: Any, action: m.ChangeFieldType) -> bool:
         if action.new_type == T.LONG_TEXT:
             continue
         try:
-            to_dao(value, action.new_type, action.field)
-            if action.new_type in whole:
-                number = float(str(value).replace(",", ".")) if isinstance(value, str) else float(value)
-                low, high = whole[action.new_type]
-                if number != int(number) or not low <= number <= high:
-                    return False
+            result = to_dao(value, action.new_type, action.field)  # lehnt Nicht-Ganzzahlen für Ganzzahltypen ab
         except Exception:
+            return False
+        if action.new_type == T.DATETIME:
+            continue
+        low, high = whole.get(action.new_type, (-math.inf, math.inf))
+        lost = (not low <= result <= high
+                or (action.new_type == T.SINGLE and struct.unpack("f", struct.pack("f", result))[0] != result)
+                or (action.new_type == T.CURRENCY and (round(result, 4) != result or abs(result) >= 9.2e14)))
+        if lost:
             return False
     return True
 

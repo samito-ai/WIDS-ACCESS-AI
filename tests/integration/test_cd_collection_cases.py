@@ -155,3 +155,25 @@ def test_file_content_starting_with_equals_is_stored_literally(harness: Any, tmp
     run(h)
     _, rows = h.access.run(lambda e: e.tables.read_sql("SELECT Liedtext FROM Tracks WHERE Titel='Letter Perfect'"))
     assert rows[0][0] == "=Null"
+
+
+@pytest.mark.parametrize(("source", "value", "new_type"), [
+    ("double", 1.23456, "Währung"),        # Währung hat nur 4 Nachkommastellen
+    ("double", 16777217, "single"),        # Single verliert ab 2^24 ganze Zahlen
+    ("Kurzer Text", "1.000", "byte"),      # „1.000“ = 1000 – passt nicht in Byte
+    ("Langer Text", "A" * 300, "Kurzer Text"),  # DISTINCT würde auf 255 kürzen und die Länge verstecken
+])
+def test_narrowing_type_change_is_blocked_by_the_lossless_check(harness: Any, source: str, value: Any,
+                                                                new_type: str) -> None:
+    """Codex (2. Runde): auch Genauigkeit, Wertebereich und volle Textlänge zählen."""
+    from app.agent.orchestrator import _converts_without_loss
+    from app.tasks.models import ChangeFieldType
+
+    table = {"title": "T", "action": {"action": "create_table", "name": "Messung", "fields": [
+        {"name": "Nr", "type": "Zahl"}, {"name": "Wert", "type": source}]}}
+    data = {"title": "Daten", "action": {"action": "insert_records", "table": "Messung", "records": [{"Nr": 1, "Wert": value}]}}
+    h = harness([plan([table, data])])
+    run(h)
+    action = ChangeFieldType.model_validate({"action": "change_field_type", "table": "Messung", "field": "Wert",
+                                             "new_type": new_type})
+    assert h.access.run(lambda e: _converts_without_loss(e, action)) is False

@@ -866,6 +866,7 @@ class ResultVerifier:
                     if wanted:
                         covered = _cells_covered(found, controls, axis)
                         left_over = [x for x in controls if x.control_type == c.AC_EMPTY_CELL and x.layout_id == found.layout_id
+                                     and x.section == found.section
                                      and found.left - 30 <= x.left < found.left + found.width - 30
                                      and found.top - 30 <= x.top < found.top + found.height - 30]
                         v.add(f"„{change.name}“ über {wanted + 1} {label} verbunden", covered >= wanted + 1 and not left_over,
