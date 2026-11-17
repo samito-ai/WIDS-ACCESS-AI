@@ -79,15 +79,16 @@ def test_costs_per_task_session_today_and_task_budget(tmp_path: Path) -> None:
     ai.task_id = 7
     from app.ai.base import ChatMessage
 
-    ai.complete(messages=[ChatMessage(role="user", content="a")])  # 1000 in / 500 out (ScriptedProvider)
+    # kurze Antworten (64 Tokens): sonst hält die Restbudget-Reserve schon die erste Anfrage zurück
+    ai.complete(messages=[ChatMessage(role="user", content="a")], max_tokens=64)  # 1000 in / 500 out (ScriptedProvider)
     per_task = storage.usage_summary(task_id=7)
     assert per_task.requests == 1 and per_task.cost_usd > 0 and per_task.input_tokens == 1000
     assert storage.last_task_with_usage() == 7
     assert storage.usage_summary(since=session).requests == 1 and storage.usage_summary("day").requests == 1
     with pytest.raises(CostLimitError, match="Aufgabenbudget"):  # Budget dieser Aufgabe schon überschritten
-        ai.complete(messages=[ChatMessage(role="user", content="b")])
+        ai.complete(messages=[ChatMessage(role="user", content="b")], max_tokens=64)
     ai.task_id = 8  # neue Aufgabe: eigenes Budget
-    ai.complete(messages=[ChatMessage(role="user", content="c")])
+    ai.complete(messages=[ChatMessage(role="user", content="c")], max_tokens=64)
     assert storage.usage_summary("total").requests == 2
 
 
