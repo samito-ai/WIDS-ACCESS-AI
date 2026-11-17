@@ -34,8 +34,9 @@ Benutzerkonto, keine Nutzungslimits und keine versteckten Gebühren**. Kosten en
 4. Details, Bericht und Sicherung: Rechtsklick auf das WIDS-Symbol unten rechts → **Dashboard** → **Verlauf**.
 5. Danach in te.comp selbst **Prüfen** klicken.
 
-Vor jeder Änderung legt WIDS eine Sicherung an (Verlauf → „Sicherung wiederherstellen“). Löschende Schritte führt
-WIDS im Hintergrund nie aus – dafür das Dashboard öffnen und bestätigen.
+Vor jeder Änderung legt WIDS eine Sicherung an (Verlauf → „Sicherung wiederherstellen“). Es gibt keine Rückfragen:
+eindeutige Schritte (auch Löschungen mit klarer Bedingung) laufen automatisch, nicht eindeutige werden als
+„blockiert“ markiert – die übrigen Schritte laufen trotzdem.
 
 ## 5. Wenn etwas nicht klappt
 - **Roter Punkt:** Dashboard → Verlauf öffnen; dort steht der Grund.

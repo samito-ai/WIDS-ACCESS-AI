@@ -1443,3 +1443,27 @@ def test_only_real_tecomp_exercises_count_as_practice(tmp_path: Path, monkeypatc
     assert tecomp.is_tecomp_exercise(str(tmp_path / "03021_66734509.accdb"))
     assert tecomp.is_tecomp_exercise(str(tmp_path / "0501S2_66732936.accdb"))
     assert not tecomp.is_tecomp_exercise(str(tmp_path / "Personal.accdb")), "eigene Datei im te.comp-Ordner"
+
+
+def test_auto_rule_excludes_cascade_deletes_and_linked_action_queries(make: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Eigene Prüfung Beta 7: Löschweitergabe entfernt mehr als gezählt; Aktionsabfragen auf verknüpften Tabellen
+    ändern Daten außerhalb der gesicherten Datei – beides nie automatisch."""
+    from app.access.models import RelationInfo
+    from app.tasks import models as m
+
+    h = make([])
+    db = h.access.path
+
+    def step(spec: dict[str, Any]) -> Any:
+        return m.PlanStep.model_validate({"id": 1, "title": "t", "action": spec})
+
+    delete = step({"action": "delete_records", "table": "Kunden", "where": "KundenNr = 1"})
+    query = step({"action": "run_action_query", "sql": "DELETE FROM Bestellungen WHERE Menge = 99"})
+    assert h.pipeline._auto_allowed(delete, db) and h.pipeline._auto_allowed(query, db)
+    schema = h.access.schema(refresh=True).model_copy(deep=True)
+    schema.relations = [RelationInfo(name="r", table="Kunden", foreign_table="Bestellungen", cascade_delete=True)]
+    monkeypatch.setattr(h.access, "schema", lambda *a, **k: schema)
+    assert not h.pipeline._auto_allowed(delete, db), "Löschweitergabe"
+    schema.relations = []
+    schema.table("Bestellungen").linked = True
+    assert not h.pipeline._auto_allowed(query, db), "verknüpfte Tabelle"

@@ -1003,7 +1003,8 @@ class TaskPipeline:
 
         - Datensätze löschen/überschreiben: nur mit Bedingung und höchstens ``mass_change_threshold`` Treffern.
         - Aktionsabfragen: die Mengengrenze prüft die Ausführung selbst (darüber: Rücknahme, Schritt blockiert).
-        - Tabelle/Feld/Abfrage/Objekt löschen, Typänderung: nur, wenn das genannte Objekt existiert und lokal ist.
+        - Tabelle/Feld/Abfrage/Objekt löschen: nur, wenn das genannte Objekt existiert und lokal ist.
+        - Verlustbehaftete Typänderung (kann Werte abschneiden): nie automatisch.
         Alles andere (keine Bedingung, zu viele Treffer, verknüpfte Tabelle, Ziel unbekannt) → nur dieser Schritt
         wird blockiert, die übrigen laufen weiter."""
         if not self.settings.security.always_backup:
@@ -1011,18 +1012,24 @@ class TaskPipeline:
         action = step.action
         try:
             schema = self._access.schema()
+            linked = [t.name.lower() for t in schema.tables if t.linked]
             if isinstance(action, m.DeleteRecords | m.UpdateRecords):
                 table = schema.table(action.table)
                 if not action.where or table is None or table.linked:
                     return False
+                if isinstance(action, m.DeleteRecords) and any(  # Löschweitergabe entfernt mehr als gezählt
+                        r.cascade_delete and r.table.lower() == action.table.lower() for r in schema.relations):
+                    return False
                 count = self._access.run(lambda e: e.tables.count_records(action.table, action.where))
                 return count <= self._policy.mass_change_threshold
-            if isinstance(action, m.RunActionQuery):
-                return True
+            if isinstance(action, m.RunActionQuery):  # Mengengrenze prüft die Ausführung; nie verknüpfte Tabellen
+                return not _tables_in(action, linked) and not any(r.cascade_delete for r in schema.relations)
             if isinstance(action, m.DeleteTable):
                 table = schema.table(action.name)
                 return table is not None and not table.linked
-            if isinstance(action, m.RemoveField | m.ChangeFieldType):
+            if isinstance(action, m.ChangeFieldType):
+                return False  # verkleinernd/verlustbehaftet (verlustfreie Typänderungen sind gar nicht „löschend“)
+            if isinstance(action, m.RemoveField):
                 table = schema.table(action.table)
                 return table is not None and not table.linked and table.field(action.field) is not None
         except WidsError:

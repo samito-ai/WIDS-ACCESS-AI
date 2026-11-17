@@ -3,6 +3,21 @@
 Alle wichtigen Änderungen an WIDS ACCESS AI. Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/),
 Versionen nach [Semantic Versioning](https://semver.org/lang/de/).
 
+## [1.0.0b7] – 2026-11-17
+
+### Geändert: keine Rückfragen mehr
+- **Alt+W ist die Zustimmung** für die geöffnete Übung – auch im Dashboard erscheinen keine Freigabe- oder
+  Bestätigungsfenster mehr. Der Schutz ist technisch: Sicherung vorher (als Datei geprüft), eindeutiges Ziel,
+  Mengengrenze (25 Datensätze), nur Objekte in der geöffneten Datei, unabhängige Prüfung danach.
+- Automatisch nach Sicherung: Datensätze mit Bedingung löschen/ändern, benannte Tabellen/Felder/Abfragen/Formulare/
+  Berichte löschen, Aktionsabfragen (Mengengrenze prüft die Ausführung).
+- Nicht eindeutig → nur dieser Schritt „blockiert“, alle unabhängigen Schritte laufen weiter: „alle Datensätze“,
+  mehr Treffer als die Grenze, Löschweitergabe (Cascade Delete), verknüpfte Tabellen, verlustbehaftete
+  Typänderungen, unbekanntes Ziel. Prüfungsschutz unverändert.
+
+### Neu
+- `docs/DEMO.md`: reproduzierbare 10-Minuten-Demo mit eigener Beispieldatenbank (ohne te.comp).
+
 ## [1.0.0b6] – 2026-11-17 (Patch)
 
 ### Neu: autonom in autorisierten Übungen
