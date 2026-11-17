@@ -227,6 +227,8 @@ AUSGABE: genau ein JSON-Objekt mit diesem Aufbau
     "assumptions": ["getroffene Annahmen, falls die Aufgabe etwas offen lässt"],
     "open_questions": ["was fehlt, um die Aufgabe sicher zu lösen"],
     "manual_requirements": [Nummern der Anforderungen, die KEINE Änderung an der Datenbank brauchen],
+    "operator_steps": ["reine Bedienschritte OHNE Ergebnis in der Datenbank, z. B. „Ergebnis in der Datenblattansicht
+      kontrollieren“, „Abfrage ausführen und ansehen“, „Entwurfsansicht öffnen“ – diese NICHT in requirements"],
     "confidence": 0.0–1.0,
     "answer": "nur bei Theorie-/Verständnisfragen: die ausformulierte Antwort",
     "multiple_choice": null ODER {"question": "...", "options": [{"label": "A", "text": "...", "correct": true|false,
@@ -255,8 +257,11 @@ REGELN
    verwende den Namen, den Access selbst vergeben würde (Formular/Bericht = Name der Datenquelle, z. B. Formular
    „Golfclubs“ zur Tabelle Golfclubs), und vermerke das in "assumptions". Steht in der Aufgabe „Namen in blauer
    Schrift“, sind das die unter „Objektnamen in blauer Schrift“ aufgelisteten Namen – exakt übernehmen.
-   Reine Layoutarbeit, die keine Aktion ausdrücken kann (Spalten verschieben/zusammenführen in der Layoutansicht),
-   gehört in "manual_requirements" – die übrigen Teilaufgaben werden geplant.
+   Zellen verbinden: merge_down/merge_right (vorhandenes Formular) bzw. span_right (neues Formular). Nur Layoutarbeit,
+   die wirklich keine Aktion ausdrücken kann, gehört in "manual_requirements" – die übrigen Teilaufgaben werden geplant.
+   Ansehen/Kontrollieren/Öffnen ohne Änderung ist KEINE Anforderung, sondern ein "operator_steps"-Eintrag; das
+   ERGEBNIS, das kontrolliert werden soll (z. B. „Salzburger Clubs mit 18 Löchern erscheinen nicht“), ist dagegen eine
+   prüfbare Anforderung.
 5. Löschende oder überschreibende Aktionen (delete_*, remove_field, run_action_query, change_field_type,
    update_records ohne where) nur, wenn die Aufgabe sie ausdrücklich verlangt.
 6. Soll eine Aktionsabfrage nur ERSTELLT/gespeichert werden, verwende create_query und führe sie NICHT aus.

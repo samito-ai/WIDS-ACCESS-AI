@@ -210,3 +210,15 @@ def test_cascading_tables_never_get_the_fresh_table_exception() -> None:
 
     schema = SimpleNamespace(relations=[RelationInfo(name="r", table="Neu", foreign_table="Alt", cascade_delete=True)])
     assert _cascades_from("neu", schema) and not _cascades_from("Alt", schema)
+
+
+def test_operator_steps_are_reported_but_never_requirements() -> None:
+    """Fall „Werte ausschließen“: „im Datenblatt kontrollieren“ ist ein Bedienschritt – nie als erledigt gemeldet, aber
+    auch kein Grund, die richtige Abfrage als „nicht abgeschlossen“ zu werten."""
+    from app.agent.explainer import analysis_markdown
+
+    analysis = m.TaskAnalysis(title="Werte ausschließen", requirements=["Abfrage schließt Salzburg mit 18 Löchern aus"],
+                              operator_steps=["Ergebnis in der Datenblattansicht kontrollieren"])
+    text = analysis_markdown(analysis)
+    assert "nicht ausgeführt" in text and "Datenblattansicht kontrollieren" in text
+    assert analysis.requirements == ["Abfrage schließt Salzburg mit 18 Löchern aus"]

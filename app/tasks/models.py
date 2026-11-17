@@ -906,6 +906,9 @@ class TaskAnalysis(BaseModel):
     open_questions: list[str] = Field(default_factory=list)
     #: Nummern (1-basiert) der Anforderungen, die keine Änderung an der Datenbank brauchen
     manual_requirements: list[int] = Field(default_factory=list)
+    #: Reine Bedienschritte ohne Spur in der Datenbank („in der Datenblattansicht kontrollieren“) – KEINE Anforderungen:
+    #: WIDS führt sie nicht aus, meldet sie nie als erledigt, und sie verändern den Status nicht
+    operator_steps: list[str] = Field(default_factory=list)
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     #: Ausformulierte Antwort bei Theorie-/Verständnisfragen
     answer: str = ""

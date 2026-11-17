@@ -45,6 +45,9 @@ def analysis_markdown(analysis: TaskAnalysis) -> str:
         lines += ["", "**Annahmen**"] + [f"- {a}" for a in analysis.assumptions]
     if analysis.open_questions:
         lines += ["", "**Offene Punkte**"] + [f"- {q}" for q in analysis.open_questions]
+    if analysis.operator_steps:
+        lines += ["", "**Bedienschritte (von WIDS nicht ausgeführt – bei Bedarf selbst ansehen; zählen nicht zum Ergebnis)**"]
+        lines += [f"- {s}" for s in analysis.operator_steps]
     if analysis.multiple_choice:
         mc = analysis.multiple_choice
         lines += ["", "**Multiple Choice**"]
