@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -127,18 +128,24 @@ _ACCESS_PROBLEMS = {"DatabaseLockedError", "AccessBusyError", "AccessTimeoutErro
 _NO_DIALOG = "Wartet auf Bestätigung (Hintergrundbetrieb, keine Rückfrage möglich – im Dashboard erneut starten): "
 
 
-def _object_key(action: Any) -> tuple[str, str]:
-    """(Objektart, Name) eines Schritts – Tabelle „Golfclubs“ und Formular „Golfclubs“ sind verschiedene Objekte."""
-    kind = getattr(action, "object_type", "") or next(
-        (k for k in ("form", "report", "query") if k in action.action), "table")
-    return kind, action.target().lower().split(".")[0]
+_DATA_WRITES = (m.InsertRecords, m.UpdateRecords, m.DeleteRecords, m.ImportData, m.RunActionQuery, m.CopyTable)
 
 
-def _builds_on_deletion(action: Any) -> bool:
-    """Setzt dieser Schritt eine Löschung am selben Objekt voraus? Ja, wenn er dort Datensätze hinzufügt bzw. das Objekt
-    neu anlegt (sonst doppelte Daten/Konflikte). Filter, Formatierungen, Änderungen anderer Datensätze: nein."""
-    return isinstance(action, m.InsertRecords | m.ImportData | m.RunActionQuery) or action.action.startswith(
-        ("create_", "copy_"))
+def _tables_in(action: Any, tables: list[str]) -> set[str]:
+    """Tabellen, die ein Schritt nennt – Ziel, Quelle oder in seinem SQL (als ganzes Wort)."""
+    text = action.model_dump_json().lower()
+    return {t for t in tables if re.search(rf"(?<![\w]){re.escape(t)}(?![\w])", text)}
+
+
+def _held_by(action: Any, held: dict[str, int], tables: list[str]) -> int | None:
+    """Schritt der nicht ausgeführten Löschung, von der dieser Schritt abhängt (oder ``None``).
+
+    Abhängig sind alle späteren DATEN-Schritte an derselben Tabelle: Hinzufügen/Importieren ergäbe doppelte Daten,
+    bedingte Änderungen träfen auch die zu löschenden Datensätze, Kopien enthielten sie. Formulare, Berichte, Filter
+    und Abfrage-Definitionen ändern keine Daten – sie laufen weiter (Live-Fund 17.11.: Formularfilter „Golfclubs“)."""
+    if not isinstance(action, _DATA_WRITES):
+        return None
+    return next((held[t] for t in sorted(_tables_in(action, tables)) if t in held), None)
 
 
 def _can_ask(interaction: Any) -> bool:
@@ -538,7 +545,7 @@ class TaskPipeline:
             before = self._access.schema(refresh=True, detailed_objects=needs_detail)
             #: Objekt → Schritt einer NICHT ausgeführten Löschung: spätere Schritte am selben Objekt setzen sie voraus
             #: (z. B. „alle löschen, dann neu importieren“ ergäbe sonst doppelte Datensätze)
-            held: dict[tuple[str, str], int] = {}
+            held: dict[str, int] = {}
             for step in solution.plan.steps:
                 if cancel.is_set():
                     raise TaskCancelledError()
@@ -546,10 +553,11 @@ class TaskPipeline:
                 # Gegen den TATSÄCHLICHEN Zustand prüfen: verhindert Folgefehler nach einem gescheiterten Schritt
                 current = self._access.schema(refresh=True)
                 check = self._validator.validate(m.ExecutionPlan.model_construct(steps=[step], notes=[]), current)
-                target = _object_key(step.action)
-                if target in held and _builds_on_deletion(step.action):
+                tables = [t.name.lower() for t in current.tables]
+                waits_for = _held_by(step.action, held, tables)
+                if waits_for is not None:
                     result = StepResult(step_id=step.id, status="skipped", message=(
-                        f"Übersprungen: setzt die nicht ausgeführte Löschung in Schritt {held[target]} voraus"))
+                        f"Übersprungen: setzt die nicht ausgeführte Löschung in Schritt {waits_for} voraus"))
                 elif check.errors:
                     result = StepResult(step_id=step.id, status="skipped",
                                         message="Übersprungen, passt nicht mehr zur Datenbank: " + check.errors[0].message)
@@ -567,7 +575,8 @@ class TaskPipeline:
                 self._access.invalidate_schema()
                 if result.status == "skipped":
                     if self._risk(step) == "destructive":
-                        held.setdefault(target, step.id)
+                        for table in _tables_in(step.action, tables):
+                            held.setdefault(table, step.id)
                     event("step_skipped", result.message, step.id)
                     continue
                 if result.status == "failed":

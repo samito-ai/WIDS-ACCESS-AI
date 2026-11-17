@@ -113,9 +113,22 @@ def resolve_source(name: str, db_path: str) -> Path:
     wanted = candidate.name.lower()
     for folder in search_dirs(db_path):
         for path in _entries(folder):
-            if path.is_file() and path.suffix.lower() in ALLOWED_SUFFIXES and wanted in (path.name.lower(), path.stem.lower()):
+            if (path.is_file() and path.suffix.lower() in ALLOWED_SUFFIXES
+                    and wanted in (path.name.lower(), path.stem.lower()) and _inside(path, folder)):
                 return path
     raise ObjectNotFoundError("Datei", name)
+
+
+def _inside(path: Path, folder: Path) -> bool:
+    """Liegt die Datei – nach Auflösen von Verknüpfungen/Junctions – wirklich im Ordner und außerhalb gesperrter Orte?
+    Gilt für die vom Benutzer freigegebenen Lernordner; te.comp- und Datenbankordner sind feste, bekannte Orte."""
+    if folder not in _USER_FOLDERS:
+        return True
+    try:
+        real, root = path.resolve(), folder.resolve()
+    except OSError:
+        return False
+    return real.is_relative_to(root) and not folder_problem(str(real.parent))
 
 
 def mentioned_sources(task_text: str, db_path: str, suffixes: tuple[str, ...] = ALLOWED_SUFFIXES) -> list[Path]:
@@ -124,7 +137,7 @@ def mentioned_sources(task_text: str, db_path: str, suffixes: tuple[str, ...] = 
     found: list[Path] = []
     for folder in search_dirs(db_path):  # bekannte Orte, nur namentlich genannte Dateien – keine Laufwerkssuche
         for path in _entries(folder):
-            if path.is_file() and path.suffix.lower() in suffixes and re.search(
+            if path.is_file() and path.suffix.lower() in suffixes and _inside(path, folder) and re.search(
                 rf"(?<![\w]){re.escape(path.stem.lower())}(?![\w])", text) and path not in found:
                 found.append(path)
     return found
@@ -390,12 +403,15 @@ def material_text(path: Path, limit: int = 4000) -> str:
     """Text einer Lernunterlage (Word .docx bzw. Markdown), gekürzt – nur lesend, ohne Zusatzpakete."""
     if path.suffix.lower() == ".docx":
         with zipfile.ZipFile(path) as archive:
+            if archive.getinfo("word/document.xml").file_size > 5_000_000:  # Schutz vor „ZIP-Bomben“
+                raise AccessError(f"Lernunterlage „{path.name}“ ist zu groß.")
             root = ElementTree.fromstring(archive.read("word/document.xml"))
         ns = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
         paragraphs = ["".join(t.text or "" for t in p.iter(f"{ns}t")) for p in root.iter(f"{ns}p")]
         text = "\n".join(p for p in paragraphs if p.strip())
     else:
-        text = _decode(path.read_bytes())
+        with path.open("rb") as handle:
+            text = _decode(handle.read(limit * 4))
     return text[:limit] + (" …(gekürzt)" if len(text) > limit else "")
 
 

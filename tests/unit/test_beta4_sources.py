@@ -61,3 +61,49 @@ def test_unreachable_user_folder_does_not_block(tmp_path: Path, monkeypatch: pyt
     importer.set_user_folders([r"\\nicht-erreichbar\freigabe\unterlagen"])
     monkeypatch.setattr(tecomp, "reachable", lambda folder: False)
     assert importer.mentioned_sources("Importieren Sie Daten.csv", str(tmp_path / "x.accdb")) == []
+
+
+def test_links_out_of_the_learning_folder_and_oversized_files_are_refused(tmp_path: Path) -> None:
+    """Codex: eine Verknüpfung im freigegebenen Ordner darf nicht auf Dateien außerhalb zeigen; große Unterlagen werden
+    nicht vollständig gelesen."""
+    import os
+
+    outside = tmp_path / "geheim"
+    outside.mkdir()
+    (outside / "credentials.md").write_text("aws_secret=XYZ", encoding="utf-8")
+    folder = tmp_path / "Unterlagen"
+    folder.mkdir()
+    try:
+        os.symlink(outside / "credentials.md", folder / "Unterlage.md")
+    except OSError:
+        pytest.skip("Symbolische Verknüpfungen brauchen hier Entwicklermodus/Adminrechte")
+    importer.set_user_folders([str(folder)])
+    db = tmp_path / "x" / "u.accdb"
+    db.parent.mkdir()
+    assert importer.mentioned_sources("Siehe Unterlage.", str(db), importer.MATERIAL_SUFFIXES) == []
+
+
+def test_material_reading_is_bounded(tmp_path: Path) -> None:
+    from app.core.errors import AccessError
+
+    big = tmp_path / "gross.md"
+    big.write_text("x" * 100_000, encoding="utf-8")
+    assert len(importer.material_text(big)) < 4100
+    bomb = tmp_path / "bombe.docx"
+    with zipfile.ZipFile(bomb, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("word/document.xml", "<w:document>" + " " * 6_000_000 + "</w:document>")
+    with pytest.raises(AccessError, match="zu groß"):
+        importer.material_text(bomb)
+
+
+def test_containment_uses_the_resolved_link_target(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    folder = tmp_path / "Unterlagen"
+    folder.mkdir()
+    link = folder / "Unterlage.md"
+    link.write_text("x", encoding="utf-8")
+    importer.set_user_folders([str(folder)])
+    assert importer._inside(link, folder)
+    real_resolve = Path.resolve
+    monkeypatch.setattr(Path, "resolve", lambda self, strict=False: Path(r"C:\Users\x\.aws\credentials.md")
+                        if self == link else real_resolve(self, strict))
+    assert not importer._inside(link, folder), "Linkziel außerhalb bzw. in gesperrtem Ordner"

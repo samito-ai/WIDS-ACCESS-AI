@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import ast
 import re
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 from fractions import Fraction
 from typing import Any
 
@@ -66,7 +66,8 @@ def _eval_node(node: ast.AST, exact: bool) -> Any:
         digits = int(_eval(node.args[1], exact)) if len(node.args) == 2 else 0
         if not 0 <= digits <= 10:
             raise CalcError("round: 0 bis 10 Nachkommastellen")
-        rounded = round_half_up(Fraction(value) if exact else Fraction(str(value)), digits)
+        # auch im Gleitkomma-Weg das EXAKTE Argument runden: 1,15 − 1 ≈ 0,1499… würde sonst falsch abrunden
+        rounded = round_half_up(Fraction(value) if exact else Fraction(_eval(node.args[0], True)), digits)
         return Fraction(rounded) if exact else float(rounded)
     raise CalcError(f"nicht erlaubter Ausdruck: {ast.dump(node)[:60]}")
 
@@ -93,8 +94,9 @@ def evaluate_float(expression: str) -> float:
 
 def round_half_up(value: Fraction, digits: int) -> Decimal:
     """Kaufmännisch runden (2,5 → 3), wie in der Schule – nicht Pythons Bankrundung."""
-    quantum = Decimal(1).scaleb(-digits)
-    return (Decimal(value.numerator) / Decimal(value.denominator)).quantize(quantum, rounding=ROUND_HALF_UP)
+    scaled = abs(value) * 10**digits
+    whole = (2 * scaled.numerator + scaled.denominator) // (2 * scaled.denominator)  # exakt: ⌊x + 0,5⌋
+    return Decimal(-whole if value < 0 else whole).scaleb(-digits)
 
 
 def literals(expression: str) -> list[Fraction]:
@@ -110,8 +112,10 @@ def numbers_in(text: str) -> set[Fraction]:
         token = raw.replace(" ", "")
         if "," in token:
             token = token.replace(".", "").replace(",", ".")
-        elif re.fullmatch(r"-?\d{1,3}(?:\.\d{3})+", token):
-            token = token.replace(".", "")  # Tausenderpunkt
+        elif re.fullmatch(r"-?[1-9]\d{0,2}(?:\.\d{3})+", token):
+            if token.count(".") == 1:
+                found.add(Fraction(token))  # „1.125“: englische Dezimalzahl ODER deutscher Tausenderpunkt
+            token = token.replace(".", "")
         found.add(Fraction(token))
     return found
 

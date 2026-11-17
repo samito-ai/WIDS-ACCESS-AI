@@ -97,7 +97,7 @@ def missing_named_objects(task_text: str, schema: DatabaseSchema) -> list[str]:
     # („… nach „Baden-Württemberg““) sind keine Objekte (Live-Fund 17.11.)
     quoted = r'[„"“]\s*([^"„“”\n]{2,64}?)\s*[“”"]'
     head = re.compile(r'(?i)\b(?:tabelle|abfrage|formular|unterformular|bericht|feld|felder|steuerelement|makro|modul|'
-                      r'navigationsformular|kreuztabelle|datenblatt)\w*\s+(?:\w+\s+){0,2}' + quoted)
+                      r'navigationsformular|kreuztabelle|datenblatt)\w*\s+(?:\w+\s+){0,3}' + quoted)
     chain = re.compile(r'\s*(?:,|\bund\b|\bsowie\b|\boder\b)\s*' + quoted)
     names: set[str] = set()
     for match in head.finditer(task_text):

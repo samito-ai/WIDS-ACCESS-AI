@@ -217,6 +217,14 @@ class QueryOps:
             columns, rows = self.run_select_isolated(sql, limit=limit, _open_only_errors=True)
             return columns, rows, True
         except _OpenFailed as exc:
+            app = getattr(self._s, "_app", None)
+            modules = 0
+            if app is not None:
+                with contextlib.suppress(Exception):
+                    modules = int(app.CurrentProject.AllModules.Count)
+            if modules:  # Access führt in einer SELECT auch eigene VBA-Funktionen aus – die könnten Daten ändern
+                raise AccessError(f"Datenfrage nicht auswertbar: Die Datei ist exklusiv geöffnet ({exc}) und enthält "
+                                  "VBA-Module – über die bestehende Verbindung wird deshalb nicht gelesen.") from None
             log.info("Eigene Leseverbindung nicht möglich (%s) – lese über die bestehende Verbindung", exc)
             columns, rows = self.run_select_sql(sql, limit=limit)
             return columns, rows, False

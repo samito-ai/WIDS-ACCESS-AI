@@ -833,8 +833,12 @@ def answer_issues(analysis: Any) -> list[str]:
     issues: list[str] = []
     mc = analysis.multiple_choice
     question = analysis.task_type in (TaskType.THEORY, TaskType.MULTIPLE_CHOICE) or mc is not None or analysis.answer
-    if not question:
-        return []  # praktische Aufgabe ohne nötige Änderung: keine Frage, die belegt werden müsste
+    if not question:  # praktische Aufgabe ohne nötige Änderung – nur offene Fragen verhindern „erledigt“
+        return ["offene Fragen: " + "; ".join(analysis.open_questions)] if analysis.open_questions else []
+    if mc is not None and mc.uncertainty.strip() and not mc.options:
+        issues.append(f"Unsicherheit: {mc.uncertainty.strip()}")
+    if analysis.task_type == TaskType.MULTIPLE_CHOICE and (mc is None or not mc.options):
+        issues.append("keine Antwortmöglichkeiten ausgewertet")
     if mc is not None and mc.options:
         if not any(o.correct for o in mc.options):
             issues.append("keine Antwortmöglichkeit als richtig belegt")

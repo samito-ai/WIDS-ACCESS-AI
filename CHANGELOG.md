@@ -21,6 +21,19 @@ Versionen nach [Semantic Versioning](https://semver.org/lang/de/).
 - KI-Anweisung: „zuletzt erfasster Datensatz“ nur über einen fortlaufenden Autowert, sonst als offene Frage; Werte aus
   Abbildungen nie erfinden.
 
+### Behoben (unabhängiges Codex-Review)
+- Lesen über die bestehende Verbindung nur, wenn die Datei keine VBA-Module enthält (eine SELECT könnte sonst eigene
+  VBA-Funktionen mit Schreibwirkung ausführen) – sonst ehrlicher Fehler statt Ersatzweg.
+- Nicht ausgeführte Löschung hält ALLE späteren Datenschritte an derselben Tabelle an – auch bedingte Änderungen,
+  SQL-Aktionsabfragen (Ziel aus dem SQL) und Tabellenkopien; Formulare, Berichte und Filter laufen weiter.
+- Lernordner: Verknüpfungen/Junctions werden aufgelöst; das Ziel muss im freigegebenen Ordner und außerhalb gesperrter
+  Orte liegen. Word-/Markdown-Unterlagen werden größenbegrenzt gelesen.
+- Rechenfragen: kaufmännisches Runden exakt auf dem Bruch (auch negativ, keine Zwischenrundung); die Gegenrechnung
+  rundet das exakte Argument; „0.125“ wird nicht als Tausenderzahl gelesen.
+- Antworten: offene Fragen verhindern „beantwortet“ auch bei praktischen Aufgaben; Multiple Choice ohne ausgewertete
+  Optionen gilt als nicht gesichert.
+- Objekthinweis auch für „… unter dem Namen „X““.
+
 ## [1.0.0b4] – 2026-11-17
 
 ### Neu
