@@ -40,3 +40,22 @@ def test_query_table_and_control_formats_are_stored_as_access_names(engine: Acce
         assert str(app.Forms("frmF").Controls("Einzelpreis").Format) == "Percent"
     finally:
         app.DoCmd.Close(2, "frmF", 2)
+
+
+def test_datasheet_sort_of_a_saved_query_is_a_datasheet_property_and_verified(engine: AccessEngine) -> None:
+    """Live-Fund „Männer und Frauen von jung nach alt“: verlangt war die Sortierung IM DATENBLATT der Abfrage, nicht
+    ORDER BY im SQL. Vorhandene Sortierung wird ersetzt; geprüft wird die gespeicherte Eigenschaft samt „aktiv“."""
+    from app.agent.executor import StepResult
+    from app.agent.verifier import ResultVerifier, Verification
+    from app.tasks import models as m
+
+    engine.queries.create_query("qryKunden", "SELECT Nachname, Vorname, Ort FROM Kunden")
+    engine.tables.set_table_sort_filter("qryKunden", order_by="[Nachname]")
+    action = m.SetTableSortFilter(table="qryKunden", order_by="[Ort], [Nachname] DESC")
+    engine.tables.set_table_sort_filter(action.table, order_by=action.order_by)
+    query = engine.session.db.QueryDefs("qryKunden")
+    assert get_property(query, "OrderBy") == "[Ort], [Nachname] DESC" and get_property(query, "OrderByOn") is True
+    assert "ORDER BY" not in str(query.SQL).upper(), "das SQL bleibt unverändert"
+    v = Verification(step_id=1)
+    ResultVerifier()._verify_set_table_sort_filter(engine, action, StepResult(step_id=1), v)
+    assert v.passed and {c.name for c in v.checks} == {"Sortierung gespeichert", "Sortierung aktiv"}, v.checks

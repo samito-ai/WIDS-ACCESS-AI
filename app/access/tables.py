@@ -599,8 +599,14 @@ class TableOps:
     def set_table_sort_filter(
         self, table: str, *, order_by: str | None = None, filter_expr: str | None = None
     ) -> None:
-        """Speichert Sortierung/Filter als Tabelleneigenschaft (wie in der Datenblattansicht)."""
-        tabledef = self._require_table(table)
+        """Speichert Sortierung/Filter der DATENBLATTANSICHT einer Tabelle oder gespeicherten Abfrage (Eigenschaften
+        OrderBy/OrderByOn bzw. Filter/FilterOnLoad – nicht ORDER BY im SQL; Live-Fund „Männer und Frauen“)."""
+        self._db.TableDefs.Refresh()
+        self._db.QueryDefs.Refresh()
+        if collection_has(self._db.QueryDefs, table) and not collection_has(self._db.TableDefs, table):
+            tabledef = self._db.QueryDefs(table)
+        else:
+            tabledef = self._require_table(table)
         with com_guard(f"Sortierung/Filter von „{table}“ setzen"):
             if order_by is not None:
                 set_property(tabledef, "OrderBy", order_by, c.DB_TEXT)

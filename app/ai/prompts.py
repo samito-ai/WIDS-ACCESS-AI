@@ -19,7 +19,10 @@ Tabellen und Felder
 - set_primary_key: table, fields[Feldnamen]
 - create_index: table, name, fields[], unique(bool)
 - delete_index: table, name
-- set_table_sort_filter: table, order_by?(z. B. "[Nachname] DESC"), filter?(z. B. "[Ort]=\\"Imst\\"")
+- set_table_sort_filter: table(Tabelle ODER gespeicherte Abfrage), order_by?(z. B. "[Geschlecht], [Geburtsdatum] DESC"
+  – ersetzt eine vorhandene Sortierung), filter?(z. B. "[Ort]=\\"Imst\\"") – Sortierung/Filter „in der
+  Datenblattansicht“ (Datenblatt-Eigenschaft, nicht ORDER BY im SQL; verlangt die Aufgabe ausdrücklich das Sortieren im
+  Datenblatt, dann dieses statt ORDER BY)
 - set_datasheet_layout: object(Tabelle ODER gespeicherte Abfrage), layout{column_order?[Spalten, die vorne stehen
   sollen, in Reihenfolge], hidden?[], unhide?[], widths_cm?{Spalte: cm}, best_fit?[Spalten – „optimale Breite“],
   frozen?[Spalten fixieren – stehen danach ganz vorne], unfreeze?(bool), formats?{Spalte: Access-Format, z. B.

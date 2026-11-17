@@ -579,13 +579,20 @@ class ResultVerifier:
         v.add("Index entfernt", table is not None and not any(_same(i.name, a.name) for i in table.indexes), a.name)
 
     def _verify_set_table_sort_filter(self, e: AccessEngine, a: m.SetTableSortFilter, r: StepResult, v: Verification) -> None:
-        from app.access.tables import get_property
+        from app.access.tables import collection_has, get_property
 
-        tabledef = e.session.db.TableDefs(a.table)
+        db = e.session.db
+        db.TableDefs.Refresh()
+        db.QueryDefs.Refresh()
+        tabledef = db.TableDefs(a.table) if collection_has(db.TableDefs, a.table) else db.QueryDefs(a.table)
         if a.order_by is not None:
             v.add("Sortierung gespeichert", str(get_property(tabledef, "OrderBy", "")) == a.order_by, a.order_by or "(keine)")
+            if a.order_by:  # ohne „beim Laden sortieren“ zeigt das Datenblatt die gespeicherte Sortierung nicht
+                v.add("Sortierung aktiv", bool(get_property(tabledef, "OrderByOn", False)))
         if a.filter is not None:
             v.add("Filter gespeichert", str(get_property(tabledef, "Filter", "")) == a.filter, a.filter or "(keiner)")
+            if a.filter:
+                v.add("Filter beim Laden aktiv", bool(get_property(tabledef, "FilterOnLoad", False)))
 
     def _verify_set_datasheet_layout(self, e: AccessEngine, a: m.SetDatasheetLayout, r: StepResult, v: Verification) -> None:
         from app.access.tables import _column_order, collection_has, get_property

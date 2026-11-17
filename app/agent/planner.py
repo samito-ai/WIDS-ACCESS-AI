@@ -412,7 +412,8 @@ class PlanValidator:
 
     def _check_set_table_sort_filter(self, step: m.PlanStep, state: _State, report: ValidationReport) -> None:
         action: m.SetTableSortFilter = step.action  # type: ignore[assignment]
-        self._need_table(report, step, state, action.table)
+        if state.known and not state.source_exists(action.table):
+            self._err(report, step, f"Tabelle oder Abfrage „{action.table}“ gibt es nicht.")
         if action.order_by is None and action.filter is None:
             self._err(report, step, "Weder Sortierung noch Filter angegeben.")
         if action.order_by:
