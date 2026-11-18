@@ -180,6 +180,9 @@ Formulare und Berichte
 - Fehlt eine Feldliste („mit folgenden Feldern:“ ohne Liste), steht aber unter QUELLDATEIEN eine Datei für dieselbe
   Tabelle: Tabelle per import_data aus dieser Datei anlegen (deren Spaltennamen, passende Typen) – nie Felder erfinden.
   Nur die Teilaufgaben, deren Angaben wirklich fehlen, kommen in "manual_requirements"/"open_questions".
+- JEDE im Text verlangte Tätigkeit („Felder verschieben“, „Felder fixieren“) ist eine eigene Anforderung – auch wenn
+  Einzelheiten fehlen. Fehlen sie, bleibt die Anforderung stehen, kommt in "manual_requirements", und die Lücke in
+  "open_questions" (nie nur als offene Frage, nie stillschweigend weglassen).
 - answer_object_property: question, object_type("table"|"query"|"form"|"report"), name, property("record_source"|
   "record_source_type"(Tabelle oder Abfrage?)|"fields"|"sql"|"query_type"|"primary_key"|"field_type"(+ field)|
   "record_count"|"group_by"|"sort") – Fragen zu einem OBJEKT („Welche Datenquelle hat der Bericht …?“, „Ist das eine

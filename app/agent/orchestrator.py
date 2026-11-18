@@ -129,6 +129,8 @@ def _data_target(step: m.PlanStep) -> str:
 _ACCESS_PROBLEMS = {"DatabaseLockedError", "AccessBusyError", "AccessTimeoutError", "AccessNotRunningError",
                     "DatabaseReadOnlyError", "DatabaseNotFoundError"}
 #: Seit Beta 7 gibt es keine Rückfragen mehr: was nicht eindeutig ist, wird nur als Schritt blockiert
+#: Darunter gilt eine Analyse MIT offenen Punkten als unvollständig erfasst (Live: Golfclubs 35 %, CD-Sammlung 60 %)
+MIN_CONFIDENCE_WITH_QUESTIONS = 0.5
 _BLOCKED = ("Blockiert – nicht eindeutig genug für die automatische Ausführung (in Access von Hand erledigen oder die "
             "Aufgabe genauer fassen): ")
 
@@ -909,6 +911,11 @@ class TaskPipeline:
         missing = [n for n in range(1, len(solution.analysis.requirements) + 1) if n not in confirmed]
         if missing:
             return finish("unklar", "Nicht bestätigt: " + ", ".join(str(n) for n in missing))
+        analysis = solution.analysis
+        if analysis.open_questions and analysis.confidence < MIN_CONFIDENCE_WITH_QUESTIONS:
+            # Live „Die Golfclubs“: nur die Einleitung erfasst, „verschieben/fixieren“ nur als offene Frage → nie Erfolg
+            return finish("unklar", f"Aufgabe nicht vollständig erfasst (Sicherheit {analysis.confidence:.0%}) – offen: "
+                          + "; ".join(analysis.open_questions))
         return finish("erfolgreich")
 
     # ------------------------------------------------------------------ Einzelschritt

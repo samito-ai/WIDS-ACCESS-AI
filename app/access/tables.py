@@ -625,6 +625,37 @@ class TableOps:
             obj = self._db.QueryDefs(name)
         else:
             raise ObjectNotFoundError("Tabelle/Abfrage", name)
+        reopen = self._close_if_open(name, is_table=collection_has(self._db.TableDefs, name))
+        if reopen:
+            obj = (self._db.TableDefs if collection_has(self._db.TableDefs, name) else self._db.QueryDefs)(name)
+        try:
+            self._apply_datasheet_layout(name, obj, spec)
+        finally:
+            if reopen:
+                reopen()
+
+    def _close_if_open(self, name: str, *, is_table: bool) -> Any:
+        """Ist das Objekt in Access geöffnet: schließen (Layout des Benutzers speichern) und eine Funktion zum
+        Wiederöffnen zurückgeben – sonst None."""
+        try:
+            app = self._s.application(create=False)
+            loaded = bool((app.CurrentData.AllTables if is_table else app.CurrentData.AllQueries)(name).IsLoaded)
+        except Exception:
+            return None
+        if not loaded:
+            return None
+        kind = c.AC_TABLE if is_table else c.AC_QUERY
+        with com_guard(f"„{name}“ vor der Änderung schließen"):
+            app.DoCmd.Close(kind, name, c.AC_SAVE_YES)
+            self._db.TableDefs.Refresh()
+            self._db.QueryDefs.Refresh()
+
+        def reopen() -> None:
+            with contextlib.suppress(Exception):
+                (app.DoCmd.OpenTable if is_table else app.DoCmd.OpenQuery)(name)
+        return reopen
+
+    def _apply_datasheet_layout(self, name: str, obj: Any, spec: DatasheetSpec) -> None:
         with com_guard(f"Datenblattansicht von „{name}“ einrichten"):
             fields = {str(f.Name).lower(): f for f in obj.Fields}
             missing = sorted(n for n in spec.columns() if n.lower() not in fields)

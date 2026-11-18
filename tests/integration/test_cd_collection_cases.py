@@ -260,3 +260,36 @@ def test_correction_cannot_bypass_a_blocked_step_through_another_requirement(har
     run(h)
     fields = [f.name for f in h.access.schema(refresh=True).table("Tracks").fields]
     assert "CD_Text" not in fields, fields
+
+
+def test_layout_of_an_open_table_is_stored_and_visible_again(harness: Any) -> None:
+    """Live „Die Golfclubs“: Tabelle in Access offen → Breiten nur in der Datei, Benutzer sah nichts. Jetzt: schließen,
+    ändern, wieder öffnen – die gespeicherte Breite stimmt und die Tabelle ist wieder offen."""
+    from app.access.specs import DatasheetSpec
+
+    h = harness([])
+
+    def work(e: Any) -> tuple[bool, int]:
+        app = e.session.application()
+        app.DoCmd.OpenTable("CDs")
+        e.tables.set_datasheet_layout("CDs", DatasheetSpec(widths_cm={"Interpret": 6.0}, frozen=["Interpret"]))
+        loaded = bool(app.CurrentData.AllTables("CDs").IsLoaded)
+        app.DoCmd.Close(0, "CDs", 1)  # wie der Benutzer: schließen und speichern
+        width = int(e.session.db.TableDefs("CDs").Fields("Interpret").Properties("ColumnWidth").Value)
+        return loaded, width
+
+    loaded, width = h.access.run(work)
+    assert loaded, "Tabelle ist nach der Änderung wieder geöffnet"
+    assert abs(width - round(6.0 * 567)) < 30, f"Breite überlebt das Schließen durch den Benutzer ({width})"
+
+
+def test_uncertain_analysis_with_open_points_is_never_successful(harness: Any) -> None:
+    """Live „Die Golfclubs“: Sicherheit 35 %, „verschieben/fixieren“ nur als offene Frage – trotzdem „erfolgreich“."""
+    layout = {"title": "Breiten", "action": {"action": "set_datasheet_layout", "object": "CDs",
+                                             "layout": {"best_fit": ["Interpret"]}}}
+    answer = plan([layout])
+    answer["analysis"].update(confidence=0.35, open_questions=["Welche Felder sollen verschoben werden?"])
+    h = harness([answer])
+    outcome = run(h)
+    assert outcome.status != "erfolgreich" and "nicht vollständig erfasst" in (outcome.error or ""), (
+        outcome.status, outcome.error)
