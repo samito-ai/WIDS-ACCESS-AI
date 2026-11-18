@@ -89,3 +89,11 @@ def test_time_default_keeps_its_time() -> None:
 
     assert default_expression("12:03:43 AM", AccessType.DATETIME) == "#12/30/1899 00:03:43#"
     assert default_expression("15.03.2026", AccessType.DATETIME) == "#03/15/2026#"
+
+
+def test_source_named_with_a_line_break_hyphen_is_found(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Live Sparverein: Datei lag im Arbeitsordner, die Aufgabe nannte sie „Sparvereins- bewegungen“."""
+    monkeypatch.setattr(importer, "search_dirs", lambda db_path: [tmp_path])
+    (tmp_path / "Sparvereinsbewegungen.xlsx").write_bytes(b"x")
+    found = importer.mentioned_sources('die Excel-Tabelle "Sparvereins- bewegungen"', str(tmp_path / "db.accdb"))
+    assert [p.name for p in found] == ["Sparvereinsbewegungen.xlsx"]

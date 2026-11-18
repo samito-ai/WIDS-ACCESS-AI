@@ -177,6 +177,9 @@ Formulare und Berichte
   „keine Stunden anzeigen“ = set_field_properties format "nn:ss" (Minuten:Sekunden) – nicht den Text kürzen. Ein
   Zeitformat wirkt NUR bei Datum/Uhrzeit: ist das Feld Text (z. B. nach dem Excel-Import), ZUERST change_field_type
   auf Datum/Uhrzeit (gilt hier als ausdrücklich verlangt), DANN das Format.
+- Fehlt eine Feldliste („mit folgenden Feldern:“ ohne Liste), steht aber unter QUELLDATEIEN eine Datei für dieselbe
+  Tabelle: Tabelle per import_data aus dieser Datei anlegen (deren Spaltennamen, passende Typen) – nie Felder erfinden.
+  Nur die Teilaufgaben, deren Angaben wirklich fehlen, kommen in "manual_requirements"/"open_questions".
 - answer_object_property: question, object_type("table"|"query"|"form"|"report"), name, property("record_source"|
   "record_source_type"(Tabelle oder Abfrage?)|"fields"|"sql"|"query_type"|"primary_key"|"field_type"(+ field)|
   "record_count"|"group_by"|"sort") – Fragen zu einem OBJEKT („Welche Datenquelle hat der Bericht …?“, „Ist das eine

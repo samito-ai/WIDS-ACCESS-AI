@@ -331,14 +331,16 @@ def parse_steps(cards: list[str]) -> WorkshopSteps:
     numbers: list[int] = []
     problem = ""
     for raw in cards:
-        text = " ".join(raw.split())
+        # Silbentrennung am Zeilenende wieder zusammenfügen: „Sparvereins-⏎bewegungen“ → „Sparvereinsbewegungen“
+        text = " ".join(re.sub(r"(\w)-[ \t]*\r?\n\s*(?=[a-zäöüß])", r"\1", raw).split())
         if not text:
             problem = problem or "Mindestens eine Teilaufgabe war nicht lesbar."
         elif match := _STEP_NUMBER.match(text):
             numbers.append(int(match.group(1)))
             steps.append(f"{match.group(1)}. {text[match.end():]}")
-        elif steps:
-            problem = problem or f"Die Karte nach Teilaufgabe {numbers[-1]} hat keine erkennbare Nummer."
+        elif steps:  # Nummer von der Texterkennung verloren – die Karte ist die nächste Teilaufgabe
+            numbers.append(numbers[-1] + 1)
+            steps.append(f"{numbers[-1]}. {text}")
         else:
             notes.append(text)
     if not steps:

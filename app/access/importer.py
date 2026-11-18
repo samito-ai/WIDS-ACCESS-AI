@@ -158,6 +158,8 @@ def _inside(path: Path, folder: Path) -> bool:
 def mentioned_sources(task_text: str, db_path: str, suffixes: tuple[str, ...] = ALLOWED_SUFFIXES) -> list[Path]:
     """Quelldateien der Übung, die in der Aufgabenstellung genannt werden."""
     text = task_text.lower()
+    # getrennte Namen aus der te.comp-Leiste („Sparvereins- bewegungen“) zusätzlich zusammengefügt durchsuchen
+    text += "\n" + re.sub(r"(\w)-\s+(?=\w)", r"\1", text)
     found: list[Path] = []
     for folder in search_dirs(db_path):  # bekannte Orte, nur namentlich genannte Dateien – keine Laufwerkssuche
         for path in _entries(folder):

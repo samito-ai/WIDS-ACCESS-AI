@@ -64,11 +64,22 @@ def test_stuck_navigation_is_reported_and_never_complete() -> None:
     (["1. A", "", "3. C"], "nicht lesbar"),
     (["1. A", "3. C"], "nicht lückenlos"),
     (["Nur ein Hinweis"], "keine nummerierten"),
-    (["Hinweis", "1. Tabelle anlegen", "Z. Abfrage erstellen"], "keine erkennbare Nummer"),  # OCR verlor die „2“
 ])
 def test_incomplete_step_lists_are_never_complete(cards: list[str], reason: str) -> None:
     steps = tecomp.parse_steps(cards)
     assert not steps.complete and reason in steps.problem
+
+
+def test_card_without_readable_number_is_the_next_step() -> None:
+    """Sparverein-Auftrag: eine Karte ohne lesbare Nummer nach Teilaufgabe 1 ist Teilaufgabe 2 (nicht verworfen)."""
+    steps = tecomp.parse_steps(["Hinweis", "1. Tabelle anlegen", "Z. Abfrage erstellen"])
+    assert steps.complete and steps.steps == ["1. Tabelle anlegen", "2. Z. Abfrage erstellen"]
+
+
+def test_hyphenated_line_break_is_joined() -> None:
+    """Live Sparverein: „Sparvereins-⏎bewegungen“ kam als „Sparvereins- bewegungen“ an – Datei nicht gefunden."""
+    steps = tecomp.parse_steps(['2. Daten importieren: die Excel-Tabelle "Sparvereins-\r\nbewegungen". Excel- und Access'])
+    assert steps.steps == ['2. Daten importieren: die Excel-Tabelle "Sparvereinsbewegungen". Excel- und Access']
 
 
 def _task(total: int, complete: bool = True) -> m.CapturedTask:
