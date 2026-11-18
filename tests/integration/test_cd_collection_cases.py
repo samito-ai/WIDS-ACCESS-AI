@@ -224,3 +224,16 @@ def test_correction_never_works_around_a_blocked_step(harness: Any, cd_db: Path)
     fields = [f.name for f in h.access.schema(refresh=True).table("Tracks").fields]
     assert "CD_Text" not in fields and outcome.status != "erfolgreich", (fields, outcome.status)
     assert h.access.run(lambda e: e.tables.count_records("Tracks", "CD Is Not Null")) == 33
+
+
+def test_correction_may_change_a_type_when_no_value_is_lost(harness: Any, cd_db: Path) -> None:
+    """Live 18.11. (2. Lauf): nur das Format geplant, die Korrektur-KI durfte den Typ nicht ändern – Teilaufgabe 9 offen."""
+    _existing_tracks(cd_db)
+    h = harness([plan([TIME_STEPS[1]])])
+    h.provider.requirement_responses.append({"unmet": {1: "Spieldauer ist Text"}})
+    h.provider.fix_responses.append({"steps": [{"title": "Typ", "rationale": "r", "covers": [1],
+                                                "action": TIME_STEPS[0]["action"]}], "notes": []})
+    run(h)
+    field = h.access.schema(refresh=True).table("Tracks").field("Spieldauer")
+    assert field.type == AccessType.DATETIME and field.format == "nn:ss", (field.type, field.format)
+    assert h.access.run(lambda e: e.tables.count_records("Tracks", "Spieldauer Is Null")) == 0

@@ -174,7 +174,9 @@ Formulare und Berichte
   zu (Groß-/Kleinschreibung, Satzzeichen, „Interpret - Titel“, kleine Tippfehler), Mehrdeutiges bleibt leer und wird
   gemeldet. NIE per DLookUp/Aktualisierungsabfrage mit Textvergleich.
 - Zeitdauern/Uhrzeiten wie „00:05:29“ sind Datum/Uhrzeit (beim Import als Feldtyp angeben bzw. Typ ändern);
-  „keine Stunden anzeigen“ = set_field_properties format "nn:ss" (Minuten:Sekunden) – nicht den Text kürzen.
+  „keine Stunden anzeigen“ = set_field_properties format "nn:ss" (Minuten:Sekunden) – nicht den Text kürzen. Ein
+  Zeitformat wirkt NUR bei Datum/Uhrzeit: ist das Feld Text (z. B. nach dem Excel-Import), ZUERST change_field_type
+  auf Datum/Uhrzeit (gilt hier als ausdrücklich verlangt), DANN das Format.
 - answer_object_property: question, object_type("table"|"query"|"form"|"report"), name, property("record_source"|
   "record_source_type"(Tabelle oder Abfrage?)|"fields"|"sql"|"query_type"|"primary_key"|"field_type"(+ field)|
   "record_count"|"group_by"|"sort") – Fragen zu einem OBJEKT („Welche Datenquelle hat der Bericht …?“, „Ist das eine
@@ -429,7 +431,8 @@ Korrekturschritte, die sie nachweisbar erfüllen:
   Schritts (Prüfpunkt und gelesener Ist-Wert in Klammern): das Objekt so korrigieren, dass genau diese Prüfung besteht.
 - „unklar“ nur korrigieren, wenn der Zustand zeigt, dass die geforderte Eigenschaft tatsächlich fehlt (z. B. keine
   verbundene Zelle im Layout). Ist sie nur nicht belegbar oder ein reiner Bedienschritt, liefere dafür keinen Schritt.
-Erlaubt sind nur nicht destruktive Aktionen (nichts löschen, keine Aktionsabfrage ausführen, keinen Datentyp ändern),
+Erlaubt sind nur nicht destruktive Aktionen (nichts löschen, keine Aktionsabfrage ausführen); einen Datentyp nur per
+change_field_type ändern (WIDS führt das nur aus, wenn jeder vorhandene Wert verlustfrei umwandelbar ist, sonst blockiert),
 höchstens 5 Schritte, nur vorhandene Namen in exakter Schreibweise. Wiederhole keine Datenimporte oder
 Datensatzeinfügungen und keine bereits erfolglos versuchten Korrekturen (siehe „BISHERIGE KORREKTURZYKLEN“).
 Objekte aus der Liste „IN DIESER AUFGABE ANGELEGT“ darfst du unter demselben Namen neu erstellen (sie werden ersetzt);

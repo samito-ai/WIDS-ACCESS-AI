@@ -257,7 +257,8 @@ class TaskAnalyzer:
         def check(plan: ExecutionPlan) -> None:
             if len(plan.steps) > 5:
                 raise ValueError("Höchstens 5 Korrekturschritte.")
-            destructive = [s.title for s in plan.steps if s.risk == "destructive"]
+            # Typänderung ausgenommen: WIDS führt sie nur aus, wenn jeder Wert verlustfrei umwandelbar ist (sonst blockiert)
+            destructive = [s.title for s in plan.steps if s.risk == "destructive" and s.action.action != "change_field_type"]
             if destructive:
                 raise ValueError(f"Destruktive Korrekturschritte sind nicht erlaubt: {destructive}")
             report = self._validator.validate(plan, schema)
