@@ -2,7 +2,7 @@
 
 APP_NAME = "WIDS ACCESS AI"
 APP_ID = "WIDS-Access-AI"
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 
 def _private_win32com_cache() -> None:

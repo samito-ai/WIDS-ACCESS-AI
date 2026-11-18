@@ -1,6 +1,6 @@
 # WIDS ACCESS AI
 
-**Version 1.1.0** · Windows 10/11 · Microsoft Access · Anthropic Claude · kostenlos, Open Source ([MIT](LICENSE))
+**Version 1.2.0** · Windows 10/11 · Microsoft Access · Anthropic Claude · kostenlos, Open Source ([MIT](LICENSE))
 
 > KI-Assistent für Microsoft-Access-**Übungen**. Übung öffnen, **Alt+W** drücken: WIDS liest die Aufgabe, plant die
 > Lösung, legt eine Sicherung an, führt die Schritte in Access aus und prüft danach jede Anforderung unabhängig.

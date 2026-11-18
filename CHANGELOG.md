@@ -3,6 +3,32 @@
 Alle wichtigen Änderungen an WIDS ACCESS AI. Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/),
 Versionen nach [Semantic Versioning](https://semver.org/lang/de/).
 
+## [1.2.0] – 2026-11-18
+
+### Neu
+- **Textdatei in ein Feld** (`set_field_from_file`): z. B. Liedtext aus „LetterPerfect.txt“; Dateiname tolerant nur bei
+  eindeutigem Treffer mit gleichen Zahlen, Inhalt immer als Text (nie als Ausdruck).
+- **Fremdschlüssel aus Text zuordnen** (`map_keys`): z. B. CD-Nummer über „Interpret - Titel“ – genaue Treffer, Teile als
+  Feldanfang, Tippfehler nur eindeutig und nur mit einem genau passenden Teil; füllt nur leere Felder, Mehrdeutiges bleibt
+  leer und wird gemeldet.
+- **Fragen zu Access-Objekten** (`answer_object_property`): Datenquelle samt Art, Felder, SQL, Schlüssel, Feldtyp, Anzahl,
+  Gruppierung, Sortierung – aus dem gespeicherten Zustand, unabhängig nachgeprüft.
+- **Formulare:** echte Layoutzellen verbinden (darunter/rechts), Rahmenart (z. B. gestrichelt) gesetzt und geprüft.
+- **Bedienschritte** („Datenblatt kontrollieren“) werden getrennt ausgewiesen und nie als erledigt gemeldet.
+- **Kostenbremse mit Reserve:** die Antwortlänge wird auf das Restbudget begrenzt; reicht es nicht, wird nichts gesendet.
+
+### Behoben (aus echten te.comp-Läufen; CD-Sammlung live 12 von 12)
+- Deutsche Formatnamen („Prozent“) ergaben kaputte Formate – eingebaute Formate werden ins Englische übersetzt (USt).
+- Datenblatt-Sortierung/-Filter auch für gespeicherte Abfragen.
+- Typänderung (z. B. Spieldauer Text → Datum/Uhrzeit) nur, wenn jeder Wert verlustfrei umwandelbar ist (Genauigkeit,
+  Wertebereich, volle Textlänge, „12:03:43 AM“); auch in der Korrektur möglich.
+- Eine Korrektur umgeht nie einen aus Sicherheitsgründen blockierten Schritt (auch nicht über eine andere Anforderung).
+- Getrennte Namen aus der te.comp-Leiste („Sparvereins- bewegungen“) finden die Excel-Datei; Silbentrennung in
+  Workshop-Karten wird zusammengefügt; eine Karte ohne lesbare Nummer gilt als nächste Teilaufgabe.
+- **Datenblatt-Layout einer in Access geöffneten Tabelle** ging beim Schließen verloren – die Tabelle wird jetzt vorher
+  geschlossen und danach wieder geöffnet.
+- **Kein falsches „erfolgreich“** mehr, wenn die Aufgabe nur unsicher erfasst wurde und Punkte offen sind.
+
 ## [1.1.0] – 2026-11-17
 
 ### Neu: ein Alt+W für den ganzen te.comp-Workshop
