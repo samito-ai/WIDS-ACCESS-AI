@@ -76,3 +76,16 @@ def test_similarity_alone_is_never_enough() -> None:
     """Auftrag: „Unscharfe Ähnlichkeit allein darf nicht automatisch zu einer … Datenänderung führen.“"""
     assert plan_key_mapping([("White Rabatt",)], CDS).keys == {}  # kein genau passender Teil
     assert plan_key_mapping([("George Benson - White Rabatt",)], CDS).keys == {("George Benson - White Rabatt",): 2}
+
+
+def test_separate_source_columns_count_as_separate_parts() -> None:
+    """Codex (3. Runde): Interpret und Titel in zwei Quellspalten – genauer Interpret stützt den ähnlichen Titel."""
+    assert plan_key_mapping([("George Benson", "White Rabatt")], CDS).keys == {("George Benson", "White Rabatt"): 2}
+
+
+def test_time_default_keeps_its_time() -> None:
+    from app.access.constants import AccessType
+    from app.access.values import default_expression
+
+    assert default_expression("12:03:43 AM", AccessType.DATETIME) == "#12/30/1899 00:03:43#"
+    assert default_expression("15.03.2026", AccessType.DATETIME) == "#03/15/2026#"

@@ -79,7 +79,7 @@ def plan_key_mapping(sources: Sequence[tuple[Any, ...]], candidates: Sequence[tu
             continue
         # „Archie Shepp - Mama Rose“ ↔ Interpret „Archie Shepp / Jasper van't Hof“, Titel „Mama Rose“: jeder Teil steckt in
         # einem Feld des Kandidaten und mindestens einer stimmt genau – zwei unabhängige Belege, nur bei EINEM Kandidaten
-        parts = [p for p in (normalize(x) for x in _PARTS.split(" ".join("" if v is None else str(v) for v in source))) if p]
+        parts = [p for v in source for p in (normalize(x) for x in _PARTS.split("" if v is None else str(v))) if p]
         if len(parts) > 1:
             fitting = {key for key, values in candidates if _fits(parts, [normalize(v) for v in values if normalize(v)])}
             if len(fitting) == 1:

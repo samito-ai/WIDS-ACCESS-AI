@@ -172,7 +172,7 @@ def default_expression(value: str, access_type: AccessType) -> str:
             parsed = parse_datetime(text)
         except DataIntegrityError:
             return text
-        return parsed.strftime("#%m/%d/%Y#")
+        return parsed.strftime("#%m/%d/%Y %H:%M:%S#" if parsed.time() != dt.time() else "#%m/%d/%Y#")
     if access_type in NUMERIC_TYPES:
         return text.replace(",", ".") if re.fullmatch(r"-?\d+,\d+", text) else text
     return text

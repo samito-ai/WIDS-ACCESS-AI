@@ -162,6 +162,7 @@ def test_file_content_starting_with_equals_is_stored_literally(harness: Any, tmp
     ("double", 16777217, "single"),        # Single verliert ab 2^24 ganze Zahlen
     ("Kurzer Text", "1.000", "byte"),      # „1.000“ = 1000 – passt nicht in Byte
     ("Langer Text", "A" * 300, "Kurzer Text"),  # DISTINCT würde auf 255 kürzen und die Länge verstecken
+    ("Kurzer Text", "9007199254740993", "double"),  # Codex (3. Runde): Double rundet ab 2^53
 ])
 def test_narrowing_type_change_is_blocked_by_the_lossless_check(harness: Any, source: str, value: Any,
                                                                 new_type: str) -> None:
@@ -240,3 +241,22 @@ def test_correction_may_change_a_type_when_no_value_is_lost(harness: Any, cd_db:
     field = h.access.schema(refresh=True).table("Tracks").field("Spieldauer")
     assert field.type == AccessType.DATETIME and field.format == "nn:ss", (field.type, field.format)
     assert h.access.run(lambda e: e.tables.count_records("Tracks", "Spieldauer Is Null")) == 0
+
+
+def test_correction_cannot_bypass_a_blocked_step_through_another_requirement(harness: Any, cd_db: Path) -> None:
+    """Codex (3. Runde): Typänderung von „CD“ blockiert (R1); eine Korrektur für R2 benennt „CD“ um und legt es neu an."""
+    _existing_tracks(cd_db)
+    lossy = {"title": "CD als Zahl", "action": {"action": "change_field_type", "table": "Tracks", "field": "CD",
+                                               "new_type": "Zahl"}}
+    other = {"title": "Beschriftung", "action": {"action": "set_field_properties", "table": "Tracks", "field": "Titelnummer",
+                                                "properties": {"caption": "Nr"}}}
+    h = harness([plan([lossy, other])])
+    h.provider.requirement_responses.append({"unmet": {1: "CD ist Text", 2: "Beziehung fehlt"}})
+    h.provider.fix_responses.append({"steps": [
+        {"title": "umbenennen", "rationale": "r", "covers": [2],
+         "action": {"action": "rename_field", "table": "Tracks", "old_name": "CD", "new_name": "CD_Text"}},
+        {"title": "neu", "rationale": "r", "covers": [2],
+         "action": {"action": "add_field", "table": "Tracks", "field": {"name": "CD", "type": "Zahl"}}}], "notes": []})
+    run(h)
+    fields = [f.name for f in h.access.schema(refresh=True).table("Tracks").fields]
+    assert "CD_Text" not in fields, fields

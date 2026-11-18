@@ -218,6 +218,16 @@ def _write_target(action: Any, queries: dict[str, str]) -> str:
     return ""
 
 
+def _field_targets(action: Any) -> set[tuple[str, str]]:
+    """(Tabelle, Feld)-Paare, deren Struktur oder Inhalt die Aktion ändert – auch über Umbenennen/neu Anlegen."""
+    table = str(getattr(action, "table", "") or "").lower()
+    if not table:
+        return set()
+    names = [getattr(action, attr, None) for attr in ("field", "old_name", "new_name", "target_field")]
+    names = [getattr(n, "name", n) for n in names]  # add_field: FieldSpec
+    return {(table, str(n).lower()) for n in names if isinstance(n, str) and n}
+
+
 def _converts_without_loss(e: Any, action: m.ChangeFieldType) -> bool:
     """Lässt sich jeder vorhandene Wert verlustfrei in den neuen Typ umwandeln? Geprüft in Python mit den WIDS-Umwandlungs-
     regeln (Access-SQL wie Val() hängt von der Spracheinstellung ab: „1,5“ → 1). Unbekannte Kombination = nein."""
@@ -241,6 +251,8 @@ def _converts_without_loss(e: Any, action: m.ChangeFieldType) -> bool:
             continue
         if action.new_type == T.LONG_TEXT:
             continue
+        if isinstance(value, str) and len(re.sub(r"\D", "", value)) > 15 and action.new_type != T.DATETIME:
+            return False  # mehr Stellen, als eine Zahl in Access genau speichern kann (Double rundet ab 2^53)
         try:
             result = to_dao(value, action.new_type, action.field)  # lehnt Nicht-Ganzzahlen für Ganzzahltypen ab
         except Exception:
@@ -1026,8 +1038,9 @@ class TaskPipeline:
         stalled = 0
         for round_no in range(1, CORRECTION_ROUNDS + 1):
             covers = {s.id: set(s.covers) for s in all_steps}
-            blocked = {n for r in results if r.status == "skipped" and r.message.startswith(_BLOCKED)
-                       for n in covers.get(r.step_id, ())}
+            blocked_ids = {r.step_id for r in results if r.status == "skipped" and r.message.startswith(_BLOCKED)}
+            blocked = {n for sid in blocked_ids for n in covers.get(sid, ())}
+            guarded = {t for s in all_steps if s.id in blocked_ids for t in _field_targets(s.action)}
             pending = [r for r in report.results if r.number not in blocked
                        and (r.status == "nicht erfüllt" or (r.status == "unklar" and r.number not in manual))]
             failing = checks_open()
@@ -1060,6 +1073,14 @@ class TaskPipeline:
                 event("log", "Nicht wiederholt (bereits ausgeführt, sonst doppelte Daten): "
                       + ", ".join(s.title for s in repeated))
                 plan = m.ExecutionPlan.model_construct(steps=[s for s in plan.steps if s not in repeated], notes=plan.notes)
+                if plan.is_empty:
+                    break
+            around = [s for s in plan.steps if not isinstance(s.action, m.ChangeFieldType)
+                      and _field_targets(s.action) & guarded]
+            if around:
+                event("log", "Nicht ausgeführt (würde einen blockierten Schritt umgehen): "
+                      + ", ".join(s.title for s in around))
+                plan = m.ExecutionPlan.model_construct(steps=[s for s in plan.steps if s not in around], notes=plan.notes)
                 if plan.is_empty:
                     break
             signature = json.dumps([s.action.model_dump(mode="json") for s in plan.steps], sort_keys=True, default=str)
