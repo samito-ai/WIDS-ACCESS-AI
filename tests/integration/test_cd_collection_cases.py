@@ -181,7 +181,7 @@ def test_narrowing_type_change_is_blocked_by_the_lossless_check(harness: Any, so
 
 def _existing_tracks(db: Path, rows: int = 33) -> None:
     """Wie live: „Tracks“ gibt es schon VOR dem Lauf (frühere Teilaufgabe), mehr Datensätze als die Mengengrenze (25),
-    Spieldauer als Text „05:29“."""
+    Spieldauer als Text „00:05:29“ – und ein Wert „12:03:43 AM“ wie im echten Excel-Import."""
     engine = AccessEngine.open(db, prefer_running=False)
     try:
         engine.tables.create_table("Tracks", [
@@ -191,7 +191,8 @@ def _existing_tracks(db: Path, rows: int = 33) -> None:
             FieldSpec(name="CD-Nummer", type=AccessType.LONG)])
         cds = [t["CD"] for t in TRACKS]
         engine.tables.insert_records("Tracks", [
-            {"CD": cds[i % len(cds)], "Titelnummer": i + 1, "Spieldauer": f"0{i % 9}:{10 + i:02d}"} for i in range(rows)])
+            {"CD": cds[i % len(cds)], "Titelnummer": i + 1, "Spieldauer": "12:03:43 AM" if i == 30 else f"00:0{i % 9}:{10 + i:02d}"}
+            for i in range(rows)])
     finally:
         engine.close()
 
@@ -206,6 +207,8 @@ def test_live_replay_existing_tracks_are_mapped_and_converted_without_loss(harne
     field = h.access.schema(refresh=True).table("Tracks").field("Spieldauer")
     assert field.type == AccessType.DATETIME and field.format == "nn:ss"
     assert h.access.run(lambda e: e.tables.count_records("Tracks", "Spieldauer Is Null")) == 0, "kein Wert verloren"
+    assert h.access.run(lambda e: e.tables.count_records(
+        "Tracks", "Format(Spieldauer, 'hh:nn:ss') = '00:03:43'")) == 1, "„12:03:43 AM“ = 00:03:43"
 
 
 def test_correction_never_works_around_a_blocked_step(harness: Any, cd_db: Path) -> None:

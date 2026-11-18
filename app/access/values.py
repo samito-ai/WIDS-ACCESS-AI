@@ -21,6 +21,8 @@ _DATE_FORMATS = (
     "%m/%d/%Y",
     "%H:%M:%S",
     "%H:%M",
+    "%I:%M:%S %p",  # Excel-Import live: „12:03:43 AM“ (Access selbst wandelt das in 00:03:43 um)
+    "%I:%M %p",
 )
 _TRUE = {"true", "wahr", "ja", "yes", "1", "-1", "x", "on"}
 _FALSE = {"false", "falsch", "nein", "no", "0", "", "off"}
@@ -54,7 +56,7 @@ def parse_datetime(value: str) -> dt.datetime:
             parsed = dt.datetime.strptime(text, fmt)
         except ValueError:
             continue
-        if fmt.startswith("%H"):
+        if fmt.startswith(("%H", "%I")):
             # reine Uhrzeit -> Access-Basisdatum
             return dt.datetime(1899, 12, 30, parsed.hour, parsed.minute, parsed.second)
         return parsed
