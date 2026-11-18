@@ -917,13 +917,17 @@ class TaskPipeline:
         # Destruktive Schritte: eigene Bestätigung zusätzlich zur Planfreigabe – außer in autorisierten Übungen mit
         # geprüfter Sicherung und eindeutigem Ziel (dort gilt weiter die Mengengrenze, max_affected bleibt gesetzt)
         tables_before = {t.name.lower() for t in self._access.schema().tables}
+        if (isinstance(step.action, m.MapKeys) and self._backup_verified
+                and self._auto_allowed(step, self._access.path)):
+            options.max_affected = None  # füllt nur LEERE Felder mit eindeutigen Treffern – überschreibt nie etwas
         fresh = self._fresh_write(step)
         if fresh:  # Daten einer Tabelle, die erst diese Aufgabe angelegt hat – vollständig in der Sicherung davor
             options.max_affected = None
         # Tabellen dieses Laufs gibt es bei der Planung noch nicht – für sie wird die Freigabe jetzt geprüft
         on_fresh = (self._backup_verified and isinstance(step.action, _FRESH_CHECKED)
                     and str(step.action.table).lower() in self._fresh_tables)
-        if (self._risk(step) == "destructive" and (step.id in self._auto_steps or fresh or on_fresh)
+        at_run = isinstance(step.action, m.ChangeFieldType | m.MapKeys)
+        if (self._risk(step) == "destructive" and (step.id in self._auto_steps or fresh or on_fresh or at_run)
                 and self._auto_allowed(step, self._access.path)):
             event("log", "Löschender Schritt automatisch ausgeführt (Übungsdatenbank, Sicherung geprüft): "
                          + self._impact(step)[0], step.id)
@@ -1021,8 +1025,11 @@ class TaskPipeline:
         checks_open: Callable[[], list[str]] = open_checks or (lambda: [])
         stalled = 0
         for round_no in range(1, CORRECTION_ROUNDS + 1):
-            pending = [r for r in report.results
-                       if r.status == "nicht erfüllt" or (r.status == "unklar" and r.number not in manual)]
+            covers = {s.id: set(s.covers) for s in all_steps}
+            blocked = {n for r in results if r.status == "skipped" and r.message.startswith(_BLOCKED)
+                       for n in covers.get(r.step_id, ())}
+            pending = [r for r in report.results if r.number not in blocked
+                       and (r.status == "nicht erfüllt" or (r.status == "unklar" and r.number not in manual))]
             failing = checks_open()
             if not (pending or failing) or not self._analyzer.available:
                 break
@@ -1229,10 +1236,10 @@ class TaskPipeline:
                 table = schema.table(action.table)
                 return table is not None and not table.linked
             if isinstance(action, m.ChangeFieldType):
-                # nur bei einer Tabelle, die dieser Lauf gerade angelegt hat – und nur, wenn JEDER vorhandene Wert sich
-                # verlustfrei umwandeln lässt (deren Daten stehen nicht in der Sicherung vom Laufbeginn)
+                # nur bei geprüfter Sicherung, lokaler Tabelle ohne Löschweitergabe – und nur, wenn JEDER vorhandene
+                # Wert sich verlustfrei umwandeln lässt (wie die Umstellung im Tabellenentwurf von Hand)
                 table = schema.table(action.table)
-                return (table is not None and not table.linked and action.table.lower() in self._fresh_tables
+                return (self._backup_verified and table is not None and not table.linked
                         and not _cascades_from(action.table, schema)
                         and self._access.run(lambda e: _converts_without_loss(e, action)))
             if isinstance(action, m.RemoveField):

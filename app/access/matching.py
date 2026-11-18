@@ -62,6 +62,7 @@ def plan_key_mapping(sources: Sequence[tuple[Any, ...]], candidates: Sequence[tu
                      *, min_ratio: float = MIN_RATIO, min_margin: float = MIN_MARGIN) -> KeyMapping:
     """``sources``: verschiedene Werte der Quellfelder; ``candidates``: (Schlüssel, Werte der Vergleichsfelder)."""
     whole = [(key, normalize("".join("" if v is None else str(v) for v in values))) for key, values in candidates]
+    fields = {key: {normalize(v) for v in values if normalize(v)} for key, values in candidates}
     single = [(key, normalize(v)) for key, values in candidates for v in values if normalize(v)]
     result = KeyMapping()
     for source in sources:
@@ -91,7 +92,8 @@ def plan_key_mapping(sources: Sequence[tuple[Any, ...]], candidates: Sequence[tu
             continue
         best, key = scored[0]
         second = scored[1][0] if len(scored) > 1 else 0.0
-        if best >= min_ratio and best - second >= min_margin:
+        # Ähnlichkeit allein reicht nie: mindestens ein Teil (z. B. der Interpret) muss genau einem Feld entsprechen
+        if best >= min_ratio and best - second >= min_margin and set(parts) & fields[key]:
             result.similar[source] = (key, round(best, 3))
         else:
             result.unresolved[source] = f"kein eindeutiger Kandidat (beste Ähnlichkeit {best:.2f})"

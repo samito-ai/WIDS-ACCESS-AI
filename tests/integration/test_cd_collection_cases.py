@@ -177,3 +177,50 @@ def test_narrowing_type_change_is_blocked_by_the_lossless_check(harness: Any, so
     action = ChangeFieldType.model_validate({"action": "change_field_type", "table": "Messung", "field": "Wert",
                                              "new_type": new_type})
     assert h.access.run(lambda e: _converts_without_loss(e, action)) is False
+
+
+def _existing_tracks(db: Path, rows: int = 33) -> None:
+    """Wie live: „Tracks“ gibt es schon VOR dem Lauf (frühere Teilaufgabe), mehr Datensätze als die Mengengrenze (25),
+    Spieldauer als Text „05:29“."""
+    engine = AccessEngine.open(db, prefer_running=False)
+    try:
+        engine.tables.create_table("Tracks", [
+            FieldSpec(name="CD", type=AccessType.SHORT_TEXT, size=255),
+            FieldSpec(name="Titelnummer", type=AccessType.LONG),
+            FieldSpec(name="Spieldauer", type=AccessType.SHORT_TEXT, size=255),
+            FieldSpec(name="CD-Nummer", type=AccessType.LONG)])
+        cds = [t["CD"] for t in TRACKS]
+        engine.tables.insert_records("Tracks", [
+            {"CD": cds[i % len(cds)], "Titelnummer": i + 1, "Spieldauer": f"0{i % 9}:{10 + i:02d}"} for i in range(rows)])
+    finally:
+        engine.close()
+
+
+def test_live_replay_existing_tracks_are_mapped_and_converted_without_loss(harness: Any, cd_db: Path) -> None:
+    """Live 18.11.: Zuordnung an der Grenze 25 gescheitert, Typänderung als „löschend“ blockiert."""
+    _existing_tracks(cd_db)
+    h = harness([plan([MAP_STEP, *TIME_STEPS])])
+    outcome = run(h)
+    assert outcome.status == "erfolgreich", [(r.step_id, r.status, r.message) for r in outcome.results]
+    assert h.access.run(lambda e: e.tables.count_records("Tracks", "[CD-Nummer] Is Null")) == 0
+    field = h.access.schema(refresh=True).table("Tracks").field("Spieldauer")
+    assert field.type == AccessType.DATETIME and field.format == "nn:ss"
+    assert h.access.run(lambda e: e.tables.count_records("Tracks", "Spieldauer Is Null")) == 0, "kein Wert verloren"
+
+
+def test_correction_never_works_around_a_blocked_step(harness: Any, cd_db: Path) -> None:
+    """Live 18.11.: Typänderung blockiert → Korrektur benannte das Feld um und legte ein leeres neues an."""
+    _existing_tracks(cd_db)
+    lossy = {"title": "CD als Zahl", "action": {"action": "change_field_type", "table": "Tracks", "field": "CD",
+                                               "new_type": "Zahl"}}
+    h = harness([plan([lossy])])
+    h.provider.requirement_responses.append({"unmet": {1: "CD ist noch Text"}})
+    h.provider.fix_responses.append({"steps": [
+        {"title": "umbenennen", "rationale": "r", "covers": [1],
+         "action": {"action": "rename_field", "table": "Tracks", "old_name": "CD", "new_name": "CD_Text"}},
+        {"title": "neu", "rationale": "r", "covers": [1],
+         "action": {"action": "add_field", "table": "Tracks", "field": {"name": "CD", "type": "Zahl"}}}], "notes": []})
+    outcome = run(h)
+    fields = [f.name for f in h.access.schema(refresh=True).table("Tracks").fields]
+    assert "CD_Text" not in fields and outcome.status != "erfolgreich", (fields, outcome.status)
+    assert h.access.run(lambda e: e.tables.count_records("Tracks", "CD Is Not Null")) == 33

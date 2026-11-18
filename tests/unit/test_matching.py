@@ -70,3 +70,9 @@ def test_numbers_in_file_names_must_match_exactly(tmp_path: Path, monkeypatch: p
     (tmp_path / "Kunden2026.csv").write_text("x", encoding="utf-8")
     with pytest.raises(Exception, match="Datei"):
         importer.resolve_source("Kunden2025.csv", str(tmp_path / "db.accdb"))  # anderer Jahrgang: nie automatisch
+
+
+def test_similarity_alone_is_never_enough() -> None:
+    """Auftrag: „Unscharfe Ähnlichkeit allein darf nicht automatisch zu einer … Datenänderung führen.“"""
+    assert plan_key_mapping([("White Rabatt",)], CDS).keys == {}  # kein genau passender Teil
+    assert plan_key_mapping([("George Benson - White Rabatt",)], CDS).keys == {("George Benson - White Rabatt",): 2}
